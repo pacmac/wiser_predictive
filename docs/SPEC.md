@@ -19,9 +19,17 @@ custom_components/wiser_predictive/
   manifest.json
   __init__.py  config_flow.py  sensor.py  binary_sensor.py  strings.json
 tests/              pytest on model.py; fixtures cut from the archived history
+deploy.py           copy the integration to the box: dry run by default, --go copies, --restart separate
 docs/SPEC.md
 ```
 Only files in this layout are in scope.
+
+## SKELETON FIRST (Peter, 2026-11-07)
+Approved with a priority change: the integration must be visible inside HA before the model exists, because until now the whole thing has been invisible. The first build is the shell:
+- Appears in Settings > Devices & services as "Wiser Predictive", one device, set up by a config flow, settings editable afterwards (options flow).
+- `margin` sensors per room are REAL (current reading minus the room's minimum), computed by `model.py`.
+- `time_to_minimum` sensors and `heat_needed` exist but report `unknown` until the model is built. They never report a made-up value, and `heat_needed` never reports off while it cannot know.
+- Installing it is a box change: `deploy.py` dry run first, `--go` copies files only, `--restart` (HA core restart, needed once for a new integration) only on Peter's go-ahead. The deploy backs up anything it overwrites and writes an apply row for the ledger.
 
 ## MODEL (model.py)
 Inputs per room: reading series (time, °C), minimum, outside temperature series.
