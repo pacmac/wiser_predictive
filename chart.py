@@ -61,6 +61,22 @@ def build(room, data, offset=0.0):
             "entry_id": "preview", "room": f"climate.wiser_{room}", "chart": chart}
 
 
+def rooms_payload(data):
+    """What panel.py's wiser_predictive/rooms returns: each fetched room's thermal character with its uncertainty."""
+    from dataclasses import asdict
+    import thermal
+
+    d = pathlib.Path(data)
+    outside = [(r[0] / 1000.0, r[1]) for r in load(d / OUTSIDE_FILE) if r[1] is not None]
+    out = []
+    for path in sorted(d.glob("climate.wiser_*.json")):
+        name = path.stem.replace("climate.wiser_", "")
+        prepared = thermal.prepare(climate_rows(load(path)), outside)
+        found = None if prepared is None else thermal.describe(thermal.cooling_windows(*prepared[1:]))
+        out.append({"entity_id": f"climate.wiser_{name}", "name": name.replace("_", " ").title(), "character": None if found is None else asdict(found)})
+    return {"rooms": out, "notes": []}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--room", default="lounge")
@@ -72,6 +88,7 @@ def main():
     html = (ROOT / "chart_template.html").read_text()
     html = html.replace("/*PANEL*/", (PKG / "frontend" / "panel.js").read_text().replace("</script", "<\\/script"))
     html = html.replace("/*DATA*/null", json.dumps(payload, separators=(",", ":")))
+    html = html.replace("/*ROOMS*/null", json.dumps(rooms_payload(args.data), separators=(",", ":")))
     pathlib.Path(args.out).write_text('<meta charset="utf-8">\n' + html)
     c = payload["chart"]
     print(f"{args.room}: {len(c['reading'])} readings, now={datetime.datetime.fromtimestamp(c['now'], datetime.timezone.utc):%m-%d %H:%M} UTC -> {args.out}")

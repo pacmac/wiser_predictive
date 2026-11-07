@@ -17,7 +17,9 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from . import history, model, series
+from dataclasses import asdict
+
+from . import history, model, series, thermal
 from .const import CONF_OUTSIDE, CONF_ROOMS, CONF_WEATHER, DOMAIN
 from .sensor import room_label
 
@@ -54,6 +56,41 @@ def forecast_series(rows: list[dict[str, Any]]) -> list[tuple[float, float]]:
         if value is not None and row.get("datetime"):
             out.append((datetime.datetime.fromisoformat(row["datetime"]).timestamp(), value))
     return out
+
+
+@websocket_api.websocket_command({vol.Required("type"): "wiser_predictive/rooms", vol.Optional("entry_id"): str})
+@websocket_api.async_response
+async def ws_rooms(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """What each room is like (thermal time constant, outdoor coupling, daily-swing delay), learned from its history, with the
+    uncertainty of each figure."""
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if not entries:
+        connection.send_error(msg["id"], "not_configured", "Wiser Predictive is not set up")
+        return
+    entry = next((e for e in entries if e.entry_id == msg.get("entry_id")), entries[0])
+    cfg = {**entry.data, **entry.options}
+    rooms: list[str] = list(cfg.get(CONF_ROOMS, []))
+    outside_entity, weather = cfg.get(CONF_OUTSIDE) or None, cfg.get(CONF_WEATHER) or None
+    source = outside_entity or weather
+    notes: list[str] = []
+    if not rooms or not source:
+        connection.send_result(msg["id"], {"rooms": [], "notes": ["Choose rooms and an outside temperature sensor or weather entity in the options."]})
+        return
+    now = dt_util.utcnow()
+    try:
+        states = await history.fetch(hass, rooms + [source], now - datetime.timedelta(days=LEARN_DAYS), now)
+    except Exception as err:
+        _LOGGER.warning("history unavailable: %s", err)
+        connection.send_result(msg["id"], {"rooms": [], "notes": [f"History could not be read: {err}"]})
+        return
+    outside = outside_series(states.get(source, []), from_attribute=not outside_entity)
+    out = []
+    for room in rooms:
+        climate = [(s.last_updated.timestamp(), dict(s.attributes)) for s in states.get(room, [])]
+        prepared = thermal.prepare(climate, outside)
+        found = None if prepared is None else thermal.describe(thermal.cooling_windows(*prepared[1:]))
+        out.append({"entity_id": room, "name": room_label(hass, room), "character": None if found is None else asdict(found)})
+    connection.send_result(msg["id"], {"rooms": out, "notes": notes})
 
 
 def predict_room(hass, room, climate, outside, forecast, now, notes: list[str]) -> dict[str, Any] | None:
@@ -134,6 +171,7 @@ async def async_register(hass: HomeAssistant) -> None:
         return
     state["panel_registered"] = True
     websocket_api.async_register_command(hass, ws_chart)
+    websocket_api.async_register_command(hass, ws_rooms)
     await register_panel(hass)
 
 

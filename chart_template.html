@@ -10,11 +10,12 @@ body{ margin:0; background:var(--primary-background-color); }
 <script>/*PANEL*/</script>
 <script>
 const DATA = /*DATA*/null;
+const ROOMS = /*ROOMS*/null;
 const start = () => {
   const panel = document.createElement('wiser-predictive-panel');
   document.body.appendChild(panel);
   const dark = window.matchMedia('(prefers-color-scheme: dark)');
-  const hass = () => ({ themes: { darkMode: dark.matches }, config: { time_zone: window.HOUSE_TZ || 'UTC' }, callWS: async () => DATA });
+  const hass = () => ({ themes: { darkMode: dark.matches }, config: { time_zone: window.HOUSE_TZ || 'UTC' }, callWS: async (m) => (m.type.endsWith('/rooms') ? ROOMS : DATA) });
   panel.hass = hass();
   dark.addEventListener('change', () => { panel.hass = hass(); });
 };

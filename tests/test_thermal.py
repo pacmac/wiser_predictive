@@ -138,3 +138,20 @@ def test_the_prediction_runs_as_far_as_the_forecast_goes_and_says_so():
     p, h, t_now, _ = planned_room()
     out = th.predict(p, now, t_now, 0.0, [(now + k * 3600, 5.0) for k in range(1, 49)], 5.0, 48)
     assert out["ends_at"] == round(now + 48 * 3600) and out["curve"][-1][0] == out["ends_at"]
+
+
+def test_describe_gives_the_published_quantities_and_an_uncertainty():
+    c = th.describe(th.cooling_windows(*room(10 * 24)))
+    omega = 2 * math.pi / 24
+    assert c is not None and abs(c.tau_h - TAU) < 1.0                       # thermal time constant
+    assert abs(c.coupling - C2 * TAU) < 0.05                                 # degrees of room per degree of outside: 0.03 * 20 = 0.6
+    assert abs(c.delay_h - math.atan(omega * TAU) / omega) < 0.3             # a daily swing arrives about 5.3 h late
+    assert abs(c.damping - c.coupling / math.sqrt(1 + (omega * TAU) ** 2)) < 0.02
+    assert c.tau_se_h is not None and c.tau_se_h < 2.0 and c.days == 10      # a clean synthetic room is well determined
+    assert abs(c.settles[8] - (-(C0 + C2 * 8.0) / C1)) < 0.5
+
+
+def test_describe_has_no_uncertainty_from_fewer_than_four_days_and_nothing_from_too_little():
+    few = th.describe(th.cooling_windows(*room(2 * 24)))
+    assert few is None or few.tau_se_h is None
+    assert th.describe(th.cooling_windows(*room(10))) is None

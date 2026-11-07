@@ -34,6 +34,15 @@ svg text.heat{ fill:var(--heat-ink); font-weight:600; font-size:11px; }
 svg text.mono{ font-family:ui-monospace,"Roboto Mono",monospace; }
 .note{ color:var(--muted); font-size:13px; max-width:80ch; margin:0; }
 .empty{ padding:28px 16px; color:var(--muted); text-align:center; }
+.rooms{ background:var(--panel); border-radius:8px; padding:12px 14px; }
+.rooms h2{ font-size:15px; font-weight:600; margin:0 0 8px; }
+.scroll{ overflow-x:auto; }
+table{ border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
+th,td{ text-align:left; padding:6px 12px 6px 0; font-size:13px; white-space:nowrap; border-bottom:1px solid var(--grid); }
+thead th{ color:var(--muted); font-weight:600; }
+tbody th{ font-weight:600; }
+tr.me td,tr.me th{ background:rgba(127,140,135,.12); }
+.sd{ color:var(--muted); }
 `;
 
 const MERGE_GAP = 20 * 60;  /* seconds. Wiser's boost and heating spans are merged when less than 20 min apart: a boost lasts 14-15 min, so one heat-up is one band. */
@@ -95,6 +104,7 @@ class WiserPredictivePanel extends HTMLElement {
       <div class="story" id="story"></div>
       <div id="readout">Move over the chart to read the values at that time.</div>
       <div id="chart"></div>
+      <div id="rooms"></div>
       <p class="note" id="note"></p></main>`;
     this.$ = id => root.getElementById(id);
     root.querySelectorAll('button[data-days]').forEach(b => b.addEventListener('click', () => {
@@ -127,9 +137,27 @@ class WiserPredictivePanel extends HTMLElement {
       this._entry = r.entry_id; this._room = r.room; this._data = r.chart; this._fillRooms(r); this._clock();
       if (!r.chart) { this.$('chart').innerHTML = '<div class="empty">No rooms are chosen. Add rooms in the Wiser Predictive options.</div>'; this.$('story').innerHTML = ''; return; }
       this._story(); this._render(); this._notes();
+      if (this._roomsFor !== this._entry) { this._roomsFor = this._entry; this._loadRooms(); }
     } catch (e) {
       this.$('chart').innerHTML = `<div class="empty">The chart could not be loaded: ${String(e.message || e.code || e).replace(/</g, '&lt;')}</div>`;
     }
+  }
+  async _loadRooms() {  /* what each room is like, learned from its history; asked for once per entry, not on the 5-minute refresh */
+    try { this._rooms = await this._hass.callWS({ type: 'wiser_predictive/rooms', ...(this._entry ? { entry_id: this._entry } : {}) }); } catch (e) { this._rooms = null; }
+    this._roomsTable();
+  }
+  _roomsTable() {
+    const el = this.$('rooms'), r = this._rooms;
+    if (!r || !r.rooms.length) { el.innerHTML = r && r.notes.length ? `<p class="note">${r.notes.join(' ').replace(/</g, '&lt;')}</p>` : ''; return; }
+    const pm = (v, s, d) => `${v.toFixed(d)}${s === null || s === undefined ? '' : ` <span class="sd">±${s.toFixed(d)}</span>`}`;
+    const rows = r.rooms.map(x => {
+      const c = x.character, me = x.entity_id === this._room ? ' class="me"' : '';
+      if (!c) return `<tr${me}><th>${x.name.replace(/</g, '&lt;')}</th><td colspan="5" class="sd">not enough free-cooling history yet</td></tr>`;
+      return `<tr${me}><th>${x.name.replace(/</g, '&lt;')}</th><td>${pm(c.tau_h, c.tau_se_h, 1)} h</td><td>${pm(c.coupling, c.coupling_se, 2)}</td>
+        <td>${c.delay_h.toFixed(1)} h, to ${Math.round(c.damping * 100)}%</td><td>${c.settles[5].toFixed(1)}° / ${c.settles[8].toFixed(1)}° / ${c.settles[11].toFixed(1)}°</td><td>${c.windows}</td></tr>`;
+    }).join('');
+    el.innerHTML = `<div class="rooms"><h2>What each room is like</h2><div class="scroll"><table><thead><tr><th>Room</th><th>Thermal time constant</th><th>Outdoor coupling</th><th>Daily swing arrives</th><th>Settles at 5° / 8° / 11° outside</th><th>Windows</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="note"><b>Thermal time constant (τ)</b> is the room's thermal capacitance divided by its heat loss coefficient: the time to cover 63% of a step change in the outside temperature. <b>Outdoor coupling</b> is how many degrees the settled room temperature moves for each degree of outside change; below 1 means heat is also exchanged with other rooms or gained inside. <b>Daily swing</b> is how late, and how much shrunk, the day-and-night outside swing arrives inside. The <span class="sd">±</span> is how far the figure moves if any one day is left out: differences between rooms smaller than that are not real yet. It narrows as more history is learned from.</p></div>`;
   }
   _fillRooms(r) {
     const sel = this.$('room'), options = r.entries.flatMap(e => e.rooms.map(x => ({ v: `${e.entry_id}|${x.entity_id}`, label: r.entries.length > 1 ? `${x.name} (${e.title})` : x.name })));

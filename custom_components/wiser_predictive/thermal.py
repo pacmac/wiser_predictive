@@ -11,6 +11,7 @@ docs/SPEC.md, MODEL. Measured in replay.py --model against "the temperature stay
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -60,11 +61,18 @@ def _solve(a: list[list[float]], b: list[float]) -> list[float] | None:
 def cooling_samples(
     temps: Sequence[float | None], heating: Sequence[bool], outside: Sequence[float | None]
 ) -> list[tuple[float, float, float]]:
-    """(T at the start, mean outside over the window, rate C/h) for every window of free cooling.
+    """(T at the start, mean outside over the window, rate C/h) for every window of free cooling (see cooling_windows)."""
+    return [(t, o, r) for _, t, o, r in cooling_windows(temps, heating, outside)]
+
+
+def cooling_windows(
+    temps: Sequence[float | None], heating: Sequence[bool], outside: Sequence[float | None]
+) -> list[tuple[int, float, float, float]]:
+    """(grid index of the start, T at the start, mean outside over the window, rate C/h) for every window of free cooling.
     The three sequences share one time grid of STEP seconds. A window counts when the heating was off for SETTLE steps before it
     and all through it, and the temperature and outside are known throughout."""
     n = len(temps)
-    out: list[tuple[float, float, float]] = []
+    out: list[tuple[int, float, float, float]] = []
     since, last = [], -10**9
     for i in range(n):
         if heating[i]:
@@ -77,8 +85,61 @@ def cooling_samples(
         outs = outside[i:end + 1]
         if temps[i] is None or temps[end] is None or any(o is None for o in outs):
             continue
-        out.append((temps[i], sum(outs) / len(outs), (temps[end] - temps[i]) / (WINDOW * STEP / 3600.0)))
+        out.append((i, temps[i], sum(outs) / len(outs), (temps[end] - temps[i]) / (WINDOW * STEP / 3600.0)))
     return out
+
+
+# --- what the room is like: the published quantities, with an honest uncertainty ------------------------------------------
+
+STEPS_PER_DAY = 86400 // STEP
+
+
+@dataclass(frozen=True)
+class Character:
+    """The room's thermal character. tau_h is the thermal time constant (total thermal capacitance / total heat loss coefficient,
+    C/HTC): the time to cover 63.2% of a step change. coupling is the degrees the settled room temperature moves per degree of
+    outside, so below 1 means heat is also exchanged with neighbours or gained inside. delay_h and damping say what a daily outside
+    swing becomes inside: the time lag and (here as a ratio of the outside swing) the decrement. *_se are leave-one-day-out
+    standard errors, None with fewer than four days."""
+
+    tau_h: float
+    tau_se_h: float | None
+    coupling: float
+    coupling_se: float | None
+    delay_h: float
+    damping: float
+    windows: int
+    days: int
+    settles: dict[int, float]  # settled room temperature at 5, 8 and 11 C outside
+
+
+def describe(windows: Sequence[tuple[int, float, float, float]]) -> Character | None:
+    """Fit the room from its free-cooling windows and say what it is like; None if there is too little to fit."""
+    p = fit([(t, o, r) for _, t, o, r in windows])
+    if p is None:
+        return None
+    days = sorted({i // STEPS_PER_DAY for i, *_ in windows})
+    taus, couplings = [], []
+    for d in days:  # leave one day out and refit: how much the answer depends on any one day
+        q = fit([(t, o, r) for i, t, o, r in windows if i // STEPS_PER_DAY != d])
+        if q is not None:
+            taus.append(q.tau_h)
+            couplings.append(q.c2 / -q.c1)
+
+    def jackknife(xs: list[float]) -> float | None:
+        k = len(xs)
+        if k < 3:
+            return None
+        m = sum(xs) / k
+        return math.sqrt((k - 1) / k * sum((x - m) ** 2 for x in xs))
+
+    omega = 2 * math.pi / 24.0
+    coupling = p.c2 / -p.c1
+    return Character(
+        tau_h=p.tau_h, tau_se_h=jackknife(taus), coupling=coupling, coupling_se=jackknife(couplings),
+        delay_h=math.atan(omega * p.tau_h) / omega, damping=coupling / math.sqrt(1 + (omega * p.tau_h) ** 2),
+        windows=p.n, days=len(days), settles={o: p.equilibrium(float(o)) for o in (5, 8, 11)},
+    )
 
 
 def fit(samples: Sequence[tuple[float, float, float]]) -> Params | None:
@@ -219,8 +280,6 @@ def predict(p: Params, now: float, temp_now: float, minimum: float, forecast, la
 # minutes of heating at full demand. Measured on the lounge's runs: one curve fitted on eight 15-minute boosts predicted the
 # held-out 175-minute run (18.5 C predicted, 18.5 C observed). Stored heat then decays with the cooling time constant, so the
 # cheapest moment to heat is the latest safe one: heat delivered earlier has longer to leak away.
-
-import math  # noqa: E402
 
 RUN_GAP_S = 20 * 60  # seconds. Two heating periods closer than this are one run: a boost lasts 14-15 min, so a boost
 # followed by another within 20 min is a continuation, while separate runs in the history were hours apart

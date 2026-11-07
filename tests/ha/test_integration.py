@@ -392,3 +392,29 @@ async def test_the_panel_learns_the_rooms_cooling_and_predicts_the_next_day(hass
     assert abs(p["curve"][-1][1] - 9.8) < 0.5  # the room's equilibrium at a steady 8 C outside: (0.25 + 0.03*8) * 20 = 9.8
     assert p["heating_now"] is False
     assert chart["notes"] == ["Not enough heat runs in the history yet to learn how the room heats up, so no heating plan."]  # no boosts in this history
+
+
+async def test_the_rooms_command_describes_each_room_with_its_uncertainty(hass, hass_ws_client):
+    import math
+
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE, "climate.bed_3": BED})
+    await setup_entry(hass, ["climate.lounge", "climate.bed_3"], outside_sensor=OUTSIDE)
+    steps, t = 8 * 144, 19.0
+    lounge_states, outside_states = [], []
+    for k in range(steps):
+        out = 8.0 + 3.0 * math.sin(2 * math.pi * (k / 6.0) / 24)
+        ago = (steps - k) * 10
+        lounge_states.append(_state("climate.lounge", "heat", {**LOUNGE, "current_temperature": round(t, 2)}, ago))
+        outside_states.append(_state(OUTSIDE, f"{out:.2f}", {}, ago))
+        t += (1 / 6) * (0.25 - t / 20.0 + 0.03 * out)
+    client = await hass_ws_client(hass)
+    with patch.object(history_mod, "fetch", AsyncMock(return_value={"climate.lounge": lounge_states, OUTSIDE: outside_states, "climate.bed_3": []})), \
+            patch("homeassistant.util.dt.utcnow", return_value=NOW):
+        await client.send_json({"id": 1, "type": "wiser_predictive/rooms"})
+        reply = await client.receive_json()
+    assert reply["success"], reply
+    by_name = {r["name"]: r["character"] for r in reply["result"]["rooms"]}
+    c = by_name["Lounge"]
+    assert abs(c["tau_h"] - 20.0) < 1.5 and c["tau_se_h"] is not None and abs(c["coupling"] - 0.6) < 0.1 and 4.5 < c["delay_h"] < 6
+    assert set(c["settles"]) == {"5", "8", "11"}
+    assert by_name["Bed 3"] is None  # no history: said so, not invented
