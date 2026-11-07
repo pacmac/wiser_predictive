@@ -1,6 +1,9 @@
 """Per-room sensors. margin is real. time_to_minimum is unknown until the model is built (docs/SPEC.md)."""
 from __future__ import annotations
 
+import inspect
+
+from homeassistant.helpers import device_registry as dr
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTemperature, UnitOfTime
@@ -31,7 +34,8 @@ def device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo:
     hub_id = entry.data.get(CONF_HUB)
     hub_dev = hubs.hub_device(hass, hub_id) if hub_id else None
     if hub_dev is not None:
-        info["via_device_id"] = hub_dev.id
+        accepts_id = "via_device_id" in inspect.signature(dr.DeviceRegistry.async_get_or_create).parameters
+        info.update(model.hub_link(hub_dev.id, hub_dev.identifiers, accepts_id))
     return info
 
 

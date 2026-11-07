@@ -33,7 +33,7 @@ def room_name(entity_id: str, attrs: Mapping[str, Any]) -> str:
 # --- time to minimum --------------------------------------------------------------------------
 # Points are (minutes, degrees C), oldest first. The caller chooses the window with recent().
 
-MIN_SPAN = 90.0  # minutes: docs/SPEC.md, a shorter window is noise at 0.1 C resolution. The replay confirms or changes it.
+MIN_SPAN = 90.0  # minutes. NOT DERIVED: it came from the old spec. The replay showed these fits are too inaccurate to use, so no entity does.
 
 
 @dataclass(frozen=True)
@@ -108,7 +108,17 @@ def heat_needed(margin_c: float | None, was_on: bool, trigger: float) -> bool | 
     return was_on
 
 
-EPISODE_OVER_FLAGS = ("is_heating", "is_boosted", "is_override")  # Wiser's own room flags: heat is already being supplied
+def hub_link(hub_device_id: str | None, hub_identifiers: Iterable[tuple[str, str]], accepts_id: bool) -> dict[str, Any]:
+    """Device-registry keyword that connects our device via the Wiser hub. Newer Home Assistant takes via_device_id
+    (via_device is deprecated and stops working in 2027.8); older Home Assistant only knows via_device."""
+    if hub_device_id is None:
+        return {}
+    if accepts_id:
+        return {"via_device_id": hub_device_id}
+    return {"via_device": next(iter(hub_identifiers))}
+
+
+EPISODE_OVER_FLAGS =("is_heating", "is_boosted", "is_override")  # Wiser's own room flags: heat is already being supplied
 
 
 def room_decision(attrs: Mapping[str, Any], was_on: bool, trigger: float) -> bool | None:

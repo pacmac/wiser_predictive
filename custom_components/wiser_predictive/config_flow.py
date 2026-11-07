@@ -31,8 +31,8 @@ def _schema(rooms: list[str], allowed: list[str], current: Mapping[str, Any]) ->
     fields[vol.Required(CONF_ROOMS, default=rooms)] = selector.EntitySelector(
         selector.EntitySelectorConfig(domain="climate", multiple=True, include_entities=allowed)
     )
-    outside = current.get(CONF_OUTSIDE)
-    fields[vol.Required(CONF_OUTSIDE, default=outside) if outside else vol.Required(CONF_OUTSIDE)] = (
+    # Optional: the margin rule does not read it. It is kept for the thermal-mass signals that may come later.
+    fields[vol.Optional(CONF_OUTSIDE, description={"suggested_value": current.get(CONF_OUTSIDE)})] = (
         selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
     )
     fields[vol.Required(CONF_TRIGGER, default=current.get(CONF_TRIGGER, DEFAULT_TRIGGER))] = selector.NumberSelector(

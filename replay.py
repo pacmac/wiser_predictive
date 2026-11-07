@@ -25,12 +25,13 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent
 MS_PER_MIN = 60_000.0
 HEATUP_RISE = 0.3  # degrees C: Peter's measure of a boost having worked (task notes 2026-11-06)
-WINDOWS = (90, 120, 180)  # minutes; 90 is the spec's floor
+WINDOWS = (90, 120, 180)  # minutes; NOT DERIVED: 90 is the old spec's floor. Belongs to the shelved time-to-minimum path.
 HORIZONS = (30, 60, 90, 120)  # minutes before the touch at which the model is asked
 REARM = 0.2  # degrees C above the minimum before another touch counts: two sensor steps, so a one-step flicker does not
-MARGIN_WITHIN = 180  # minutes: a fire counts as warning of a touch only if one follows inside this (the old backtest's 3 h)
+MARGIN_WITHIN = 180  # minutes: a fire counts as warning of a touch only if one follows inside this. Derived: hits at 60/120/180/240/360 min
+# were 3/8/9/9/11; 180 is where the curve flattens, and the 2 extra hits at 360 are touches 5 h later, not warning.
 OFFSETS = (0.1, 0.2, 0.3, 0.4)  # degrees C above the minimum for the margin rule
-SAMPLE_STEP = 5  # minutes between samples: no longer than the gaps the lounge sensor actually reports at
+SAMPLE_STEP = 5  # minutes between samples. NOT DERIVED (lounge readings: median gap 1.5 min, p90 10.7 min). Shelved time-to-minimum path.
 
 
 def _load_model():

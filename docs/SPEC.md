@@ -52,7 +52,7 @@ Per room: `sensor.<room>_time_to_minimum` (min), `sensor.<room>_margin` (°C abo
 One `binary_sensor.heat_needed`: ON if any room is on; OFF if at least one room is known and none is on; unknown only when every room is unknown (a room with a flat battery must not make it unknown for good). Attributes: per room margin and state, and the rooms that are on.
 
 ## CONFIG (config flow, editable in the HA UI)
-Hub, rooms, outside sensor (kept for later signals; the margin rule does not use it), `trigger_margin` (default 0.1 °C, one sensor step), `announce_script` (optional script entity), `announce_data` (optional object merged into the script's variables, e.g. target and chime for a house with several sites). With no announce script nothing is announced.
+Hub, rooms, outside sensor (OPTIONAL: the margin rule does not use it; kept for later signals), `trigger_margin` (default 0.1 °C, one sensor step), `announce_script` (optional script entity), `announce_data` (optional object merged into the script's variables, e.g. target and chime for a house with several sites). With no announce script nothing is announced.
 
 ## HUB (Peter, 2026-11-07)
 A house can have more than one Wiser hub (here two: `03E34F` has all the rooms; `05C5D8` has the boiler channels only). Each hub is its own `wiser` config entry, and each room device is linked to its hub (`via_device`).
@@ -81,6 +81,7 @@ Later stages (raise the lounge target; retire Boost on Demand) need their own sp
 - Unit tests on `model.py` with synthetic series (falling, rising, flat, short window, flicker).
 - Replay of the archived history (`../inventory/archive/predictive-*.json`, merged from 2026-10-27; git-ignored there, so cut a small fixture into `tests/`). Report per episode: lead achieved, minimum touched yes/no, false alarms.
 - A change is closed only on a test that ran red then green.
+- HA-side code (`config_flow.py`, `sensor.py`, `binary_sensor.py`, `hub.py`) runs under a real Home Assistant: `tests/ha/` with pytest-homeassistant-custom-component in a venv (`python -m pytest tests/ha -q -o asyncio_mode=auto`). It is skipped when the harness is not installed. The harness version (2026.2.3 on 2026-11-07) may lag the box (2026.10.4), so code that depends on a newer API (`via_device_id`) is chosen at run time and the newer branch is covered only by a unit test of the choice.
 
 ## OUT OF SCOPE
 Any box change (needs a dry run, backup, ledger row, Peter's go-ahead). The Wiser integration. The soil-sensor area fix. The `ha-inventory` repo.

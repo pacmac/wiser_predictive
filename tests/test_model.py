@@ -87,6 +87,17 @@ def test_house_state_is_on_if_any_room_is_on_off_if_one_is_known_unknown_only_if
     assert model.any_room_on([]) is None
 
 
+def test_hub_link_uses_the_device_id_where_home_assistant_accepts_it_else_the_identifier():
+    # newer HA takes via_device_id (the old via_device is deprecated and goes in 2027.8); older HA only knows via_device
+    assert model.hub_link("dev-123", {("wiser", "hub-1")}, accepts_id=True) == {"via_device_id": "dev-123"}
+    assert model.hub_link("dev-123", {("wiser", "hub-1")}, accepts_id=False) == {"via_device": ("wiser", "hub-1")}
+
+
+def test_no_hub_device_means_no_link():
+    assert model.hub_link(None, set(), accepts_id=True) == {}
+    assert model.hub_link(None, set(), accepts_id=False) == {}
+
+
 HOT_WATER = {"current_temperature": None, "target_temp_low": 45.0, "target_temp_high": 55.0, "friendly_name": "Wiser Hot Water"}
 
 
