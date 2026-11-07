@@ -144,22 +144,32 @@ class WiserPredictivePanel extends HTMLElement {
     if (pr) {
       const when = t => fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }), lowF = pr.outside_low;
       const out = lowF ? ` Outside forecast low ${num(lowF[1])}° at ${when(lowF[0])}.` : '';
-      const v = pr.reaches_at ? `Reaches ${num(pr.minimum)}° at ${when(pr.reaches_at)}` : `Stays above ${num(pr.minimum)}°`;
+      const v = pr.reaches_at ? `Reaches ${num(pr.minimum)}° at ${when(pr.reaches_at)}` : `Stays above ${num(pr.minimum)}° until ${when(pr.ends_at)}`;
       const d = pr.reaches_at
         ? `If nothing heats it. Heat is needed by ${when(pr.call_by)}: once heat is called the room stops falling within ${Math.round(pr.lead_s / 60)} min.${out}`
-        : `For the next 24 h if nothing heats it. Lowest ${num(pr.lowest[1])}° at ${when(pr.lowest[0])}.${out}`;
+        : `As far as the forecast goes (${Math.round(pr.horizon_h)} h), if nothing heats it. Lowest ${num(pr.lowest[1])}°${pr.falling_at_end ? ', and still falling when the forecast ends' : ''}.${out}`;
       predicted = `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Prediction</div><div class="v">${v}</div>
         <div class="d">${this._cold ? `<b>What if: outside ${this._cold}° colder than forecast.</b> ` : ''}${d}${pr.heating_now ? ' Heating is on now; this is what happens if it stops now.' : ''}</div>
         <div class="d">Learned from 10 days: cools over ${pr.tau_h} h. Minimum is ${pr.minimum_source}.</div></div>`;
     }
-    this.$('story').innerHTML = predicted + sum(D.reading, 'Inside', '--in') + sum(D.outside, 'Outside', '--out') +
+    let plan = '';
+    if (pr && pr.plan && pr.plan.runs.length) {
+      const when = t => fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }), r = pr.plan.runs, a = r[0];
+      const more = r.slice(1).map(x => `then ${x.minutes} min from ${when(x.call_by)}`).join(', ');
+      plan = `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Plan</div><div class="v">Heat ${a.minutes} min from ${when(a.call_by)}</div>
+        <div class="d">Full-demand minutes, as late as is safe. It lifts the room to ${num(a.lifts_to)}° and ${a.holds_until ? `holds the minimum until ${when(a.holds_until)}` : 'holds the minimum to the end of the forecast'}.${more ? ' ' + more + '.' : ''}</div>
+        <div class="d">Heat response learned from ${pr.heating.runs} runs (error ${num(pr.heating.rms, 2)}°).</div></div>`;
+    } else if (pr && pr.plan) {
+      plan = `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Plan</div><div class="v">No heat needed</div><div class="d">The room stays above its minimum as far as the forecast goes.</div></div>`;
+    }
+    this.$('story').innerHTML = predicted + plan + sum(D.reading, 'Inside', '--in') + sum(D.outside, 'Outside', '--out') +
       `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Heating on</div><div class="v">${heats.length} ${heats.length === 1 ? 'time' : 'times'}, ${mins} min in all</div>
         <div class="d">${heats.length ? `Latest: ${when}.` : 'It did not come on.'}</div></div>`;
   }
   _notes() {
     const D = this._data;
     this.$('note').textContent = (D.notes.length ? D.notes.join(' ') + ' ' : '') +
-      `Recorded history up to ${fmtT(D.now, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}. Heating is the room's boost and heating periods from Wiser. The dotted line is the predicted temperature if no heat is supplied, from the room's own cooling and the outside forecast.`;
+      `Recorded history up to ${fmtT(D.now, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}. Heating is the room's boost and heating periods from Wiser. The dotted blue line is the predicted temperature if no heat is supplied, from the room's own cooling and the outside forecast. The dashed orange line is the temperature with the planned heating.`;
   }
 
   _render() {
@@ -169,8 +179,9 @@ class WiserPredictivePanel extends HTMLElement {
     const X = t => LEFT + (t - x0) / (x1 - x0) * (W - LEFT - RIGHT), css = n => this._css(n);
     const heats = heatSpans(D).filter(([, b]) => b > x0), pr = D.prediction;
     const panels = [
-      { id: 'in', h: 260, title: `Inside ${D.name}, °C`, color: '--in', extra: pr ? [pr.minimum, ...pr.curve.map(c => c[1])] : [],
-        lines: [{ data: D.reading, w: 2.6 }, ...(pr ? [{ data: pr.curve, w: 2.4, dash: '2 5' }] : [])] },
+      { id: 'in', h: 260, title: `Inside ${D.name}, °C`, color: '--in', extra: pr ? [pr.minimum, ...pr.curve.map(c => c[1]), ...(pr.plan ? pr.plan.curve.map(c => c[1]) : [])] : [],
+        lines: [{ data: D.reading, w: 2.6 }, ...(pr ? [{ data: pr.curve, w: 2.4, dash: '2 5' }] : []),
+          ...(pr && pr.plan && pr.plan.runs.length ? [{ data: pr.plan.curve, w: 2.4, dash: '8 4', color: '--heat-ink' }] : [])] },
       { id: 'out', h: 170, title: 'Outside, °C', color: '--out', lines: [{ data: D.outside, w: 2.4 }, { data: D.forecast, w: 2.4, dash: '6 4' }] },
     ];
     let y = 4, body = '', first = null;
@@ -188,7 +199,7 @@ class WiserPredictivePanel extends HTMLElement {
       body += `<clipPath id="c-${p.id}"><rect x="${LEFT}" y="${top}" width="${W - LEFT - RIGHT}" height="${p.h}"/></clipPath><g clip-path="url(#c-${p.id})">`;
       for (const l of p.lines) {
         const pts = visible(l.data, x0, x1); if (!pts.length) continue;
-        body += `<path d="${pts.map(([t, v], i) => (i ? 'L' : 'M') + X(t) + ' ' + Y(v)).join(' ')}" fill="none" stroke="${css(p.color)}" stroke-width="${l.w}" ${l.dash ? `stroke-dasharray="${l.dash}"` : ''} stroke-linejoin="round" stroke-linecap="round"/>`;
+        body += `<path d="${pts.map(([t, v], i) => (i ? 'L' : 'M') + X(t) + ' ' + Y(v)).join(' ')}" fill="none" stroke="${css(l.color || p.color)}" stroke-width="${l.w}" ${l.dash ? `stroke-dasharray="${l.dash}"` : ''} stroke-linejoin="round" stroke-linecap="round"/>`;
       }
       body += '</g>';
       if (p.id === 'in' && pr) {  /* the room's minimum, and the moment heat must be called if the room is left alone */

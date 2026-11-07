@@ -66,3 +66,75 @@ def test_a_missing_outside_reading_drops_the_window_instead_of_counting_it_as_ze
     clean = th.cooling_samples(temps, heat, room(48)[2])
     gap = th.cooling_samples(temps, heat, outs)
     assert len(gap) < len(clean)
+
+
+# --- the heating response and the plan ----------------------------------------------------------------------------------
+
+TMAX, TAU_MIN = 19.0, 80.0
+
+
+def rows_with_runs(minutes_list, gap_h=30.0, t0=12.6):
+    """A room history: heat runs (demand 100%) of the given lengths, each starting gap_h after the last, settling at the heating
+    curve; between runs the room just sits at the settled temperature (the fit only needs before/settled readings)."""
+    rows, t, now_t = [], t0, 0.0
+    rows.append((now_t, {"current_temperature": t, "is_heating": False, "percentage_demand": 0}))
+    for m in minutes_list:
+        now_t += gap_h * 3600
+        rows.append((now_t - 3600, {"current_temperature": t0, "is_heating": False, "percentage_demand": 0}))  # cooled back down
+        rows.append((now_t, {"current_temperature": t0, "is_heating": True, "percentage_demand": 100}))
+        after = t0 + (TMAX - t0) * (1 - math.exp(-m / TAU_MIN))
+        rows.append((now_t + m * 60, {"current_temperature": after, "is_heating": False, "percentage_demand": 0}))
+        rows.append((now_t + m * 60 + 2 * th.SETTLED_S, {"current_temperature": after, "is_heating": False, "percentage_demand": 0}))
+    return rows
+
+
+def test_runs_are_found_with_their_full_demand_minutes_and_settled_lift():
+    found = th.runs(rows_with_runs([15, 15, 40]))
+    assert [round(r["minutes"]) for r in found] == [15, 15, 40]
+    assert all(abs(r["before"] - 12.6) < 1e-9 for r in found)
+    assert abs(found[0]["settled"] - (12.6 + (TMAX - 12.6) * (1 - math.exp(-15 / TAU_MIN)))) < 1e-9
+
+
+def test_the_heating_fit_recovers_the_curve_from_runs_of_different_lengths():
+    h = th.fit_heating(th.runs(rows_with_runs([10, 15, 15, 20, 40, 90, 150])))
+    assert h is not None and abs(h.tmax - TMAX) < 0.4 and abs(h.tau_min - TAU_MIN) < 8 and h.rms < 0.05
+
+
+def test_too_few_runs_gives_no_heating_model():
+    assert th.fit_heating(th.runs(rows_with_runs([15, 15, 15]))) is None
+
+
+def planned_room():
+    temps, heat, outs = room(96)
+    p = th.fit(th.cooling_samples(temps, heat, outs))
+    h = th.Heating(TMAX, TAU_MIN, 8, 0.0)
+    return p, h, temps[-1], outs
+
+
+def test_the_plan_calls_as_late_as_is_safe_and_holds_the_minimum_to_the_end():
+    p, h, t_now, _ = planned_room()
+    now, forecast = 1_000_000.0, [(1_000_000.0 + k * 3600, 2.0) for k in range(1, 49)]  # a cold spell: 2 C for 2 days
+    minimum = t_now - 0.5
+    plan = th.plan(p, h, now, t_now, minimum, forecast, 2.0, horizon_h=48)
+    assert plan["runs"], "a room that will fall below its minimum needs a run"
+    first = plan["runs"][0]
+    free = th.predict(p, now, t_now, minimum, forecast, 2.0, 48)
+    assert first["call_by"] == free["call_by"]  # the same latest-safe moment the prediction gives
+    assert first["minutes"] % th.RUN_STEP_MIN == 0 and first["lifts_to"] > minimum
+    assert min(v for _, v in plan["curve"]) >= minimum - 0.15  # never below it, to within the 30-minute sampling
+
+
+def test_no_run_is_planned_for_a_room_that_stays_above_its_minimum():
+    p, h, t_now, _ = planned_room()
+    now = 1_000_000.0
+    forecast = [(now + k * 3600, 30.0) for k in range(1, 25)]  # warm: it will not cool to the minimum
+    assert th.plan(p, h, now, t_now, 5.0, forecast, 30.0)["runs"] == []
+
+
+def test_the_prediction_runs_as_far_as_the_forecast_goes_and_says_so():
+    now = 1_000_000.0
+    assert th.horizon_for(now, []) == th.HORIZON_H
+    assert abs(th.horizon_for(now, [(now + k * 3600, 5.0) for k in range(1, 49)]) - 48.0) < 1e-9
+    p, h, t_now, _ = planned_room()
+    out = th.predict(p, now, t_now, 0.0, [(now + k * 3600, 5.0) for k in range(1, 49)], 5.0, 48)
+    assert out["ends_at"] == round(now + 48 * 3600) and out["curve"][-1][0] == out["ends_at"]

@@ -29,11 +29,20 @@ def predict(climate, outside, forecast, now: float, low: float | None, heating_n
     minimum, source = (low, "its low setting") if low is not None else (thermal.held_floor(climate), "the lowest target it held for an hour or more")
     if not readings or minimum is None or not outside:
         return None, ["No minimum or no current reading for this room, so no prediction."]
-    result = thermal.predict(params, now, float(readings[-1][1]), minimum, forecast, sorted(outside)[-1][1])
+    horizon = thermal.horizon_for(now, forecast)
+    last_outside, t_now = sorted(outside)[-1][1], float(readings[-1][1])
+    result = thermal.predict(params, now, t_now, minimum, forecast, last_outside, horizon)
     if "error" in result:
         return None, [f"No prediction: {result['error']}."]
     result["minimum_source"] = source
     result["heating_now"] = heating_now
+    result["horizon_h"] = round(horizon, 1)
+    heat = thermal.fit_heating(thermal.runs(climate))
+    if heat is None:
+        notes.append("Not enough heat runs in the history yet to learn how the room heats up, so no heating plan.")
+    else:
+        result["heating"] = {"tmax": heat.tmax, "tau_min": heat.tau_min, "runs": heat.runs, "rms": round(heat.rms, 2)}
+        result["plan"] = thermal.plan(params, heat, now, t_now, minimum, forecast, last_outside, horizon)
     return result, notes
 
 
@@ -75,7 +84,7 @@ def build(
     return {
         "name": name,
         "now": round(now),
-        "end": round(now + HORIZON_H * 3600),
+        "end": round(now + (prediction.get("horizon_h", HORIZON_H) if prediction else HORIZON_H) * 3600),
         "reading": _pairs(reading),
         "outside": _pairs(outside),
         "forecast": _pairs((t, v) for t, v in forecast if t >= now - 3600),
