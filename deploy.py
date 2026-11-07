@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Install custom_components/wiser_predictive on the HA box (ha.ellis) through sshhauk.
+"""Install custom_components/wiser_predictive on your HA box over ssh. Set HA_SSH, e.g.
+  HA_SSH="ssh root@homeassistant.local" python3 -I deploy.py
 
   deploy.py            dry run: what would be new / changed / unchanged. Touches nothing.
   deploy.py --go       copy the files. Anything already on the box is backed up first. Verified by hash afterwards.
@@ -11,13 +12,15 @@ Backup and the ledger row go to /tmp/wiser_predictive/ (apply-<run>.tsv, same co
 import argparse
 import hashlib
 import io
+import os
 import pathlib
+import shlex
 import subprocess
 import sys
 import tarfile
 import time
 
-SSH = "/usr/share/pac/dev/bash/sshhauk"
+SSH = os.environ.get("HA_SSH")  # command that runs a shell command on the HA box, e.g. "ssh root@homeassistant.local"
 SRC = pathlib.Path(__file__).resolve().parent / "custom_components" / "wiser_predictive"
 PARENT = "/config/custom_components"
 DEST = PARENT + "/wiser_predictive"
@@ -25,7 +28,9 @@ LOG = pathlib.Path("/tmp/wiser_predictive")
 
 
 def ssh(cmd, data=None, check=True):
-    return subprocess.run([SSH, cmd], input=data, capture_output=True, check=check)
+    if not SSH:
+        sys.exit('set HA_SSH to the command that runs a shell command on your HA box, e.g. HA_SSH="ssh root@homeassistant.local"')
+    return subprocess.run(shlex.split(SSH) + [cmd], input=data, capture_output=True, check=check)
 
 
 def local_files():
@@ -65,7 +70,7 @@ def main():
     local = local_files()
     remote = remote_hashes()
     rows = compare(local, remote)
-    print(f"{SRC}  ->  ha.ellis:{DEST}")
+    print(f"{SRC}  ->  {DEST} on the box")
     for rel, verdict in rows:
         print(f"  {verdict:16} {rel}")
 

@@ -8,8 +8,18 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
+def is_room(attrs: Mapping[str, Any]) -> bool:
+    """Wiser room thermostats carry is_passive; the hot water channel does not."""
+    return "is_passive" in attrs
+
+
+def room_name(entity_id: str, attrs: Mapping[str, Any]) -> str:
+    """The entity's own name ("Bed 3"), else its friendly name, else the entity id made readable."""
+    return attrs.get("name") or attrs.get("friendly_name") or entity_id.split(".", 1)[1].replace("_", " ").title()
+
+
 def minimum_of(attrs: Mapping[str, Any]) -> float | None:
-    """A passive room's minimum is its thermostat LOW; the lounge has one target and that is its minimum."""
+    """A passive room's minimum is its thermostat LOW; a non-passive room has one target and that is its minimum."""
     low = attrs.get("target_temp_low")
     if low is not None:
         return float(low)

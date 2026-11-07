@@ -43,8 +43,16 @@ Per room: `sensor.<room>_time_to_minimum` (min), `sensor.<room>_margin` (°C abo
 One `binary_sensor.heat_needed`, attributes: room that triggered, time_to_minimum, lead.
 
 ## CONFIG (config flow, editable in the HA UI)
-Outside sensor (default `sensor.ewelink_th01_temperature`, garage roofspace, r 0.88 with forecast, lags 2 h, about 1.4 °C warm), rooms (`climate.wiser_*`), buffer, announce target.
-Wiser heating state: `sensor.wiser_heating` (Hub A; NOT `_channel_1`, which is Hub B).
+Outside sensor, rooms, buffer, announce target, heating-state sensor.
+
+## NOTHING HARD-CODED (Peter, 2026-11-07)
+The integration must work in any house with a Wiser system. No entity id, room name, hub name or site name of this house appears in the code or as a default.
+- Rooms are DISCOVERED: climate entities registered by the `wiser` integration that carry `is_passive` (Wiser rooms do; the hot water channel does not). The user can untick any. Room names come from the entity's own `name`, falling back to `friendly_name`, then the entity id.
+- Outside sensor: NO default. The user picks a temperature sensor. (In this house the garage roofspace sensor fits best, r 0.88 with the forecast, lags 2 h, about 1.4 °C warm; that is this house's choice at setup, not code.)
+- Heating-state sensor (which Wiser hub's heating): chosen by the user, no default. (In this house it is Hub A `sensor.wiser_heating`, NOT `_channel_1`, which is Hub B.)
+- Minimum per room comes from the climate attributes (`target_temp_low`, else `temperature`), never a number in code.
+- `deploy.py` is a development tool: the ssh command comes from the environment (`HA_SSH`), not from the repo.
+- House facts live in this spec's notes and the handover, not in `custom_components/`.
 
 ## STAGE 1 (the only stage in this spec)
 Announce only: `script.speak`, target `both` (uk + sg), cooldown 120 min. NO `climate.set_temperature`, no change to Boost on Demand.

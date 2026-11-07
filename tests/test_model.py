@@ -35,3 +35,22 @@ def test_no_reading_gives_no_margin():
 
 def test_no_minimum_gives_no_margin():
     assert model.margin({"current_temperature": 13.0}) is None
+
+
+HOT_WATER = {"current_temperature": None, "target_temp_low": 45.0, "target_temp_high": 55.0, "friendly_name": "Wiser Hot Water"}
+
+
+def test_wiser_rooms_are_recognised_by_is_passive():
+    assert model.is_room(LOUNGE)
+    assert model.is_room(BED_3)
+    assert model.is_room(TOILET)
+
+
+def test_hot_water_channel_is_not_a_room():
+    assert not model.is_room(HOT_WATER)
+
+
+def test_room_name_prefers_name_then_friendly_name_then_entity_id():
+    assert model.room_name("climate.wiser_bed_3", {"name": "Bed 3", "friendly_name": "Wiser Bed 3 Heating"}) == "Bed 3"
+    assert model.room_name("climate.x", {"friendly_name": "Spare Room"}) == "Spare Room"
+    assert model.room_name("climate.spare_room", {}) == "Spare Room"

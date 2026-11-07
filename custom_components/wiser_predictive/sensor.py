@@ -10,11 +10,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from . import model
-from .const import CONF_ROOMS, DEFAULT_ROOMS, DOMAIN
+from .const import CONF_ROOMS, DOMAIN
 
 
-def room_label(entity_id: str) -> str:
-    return entity_id.split(".", 1)[1].removeprefix("wiser_").replace("_", " ").title()
+def room_label(hass: HomeAssistant, entity_id: str) -> str:
+    state = hass.states.get(entity_id)
+    return model.room_name(entity_id, state.attributes if state else {})
 
 
 def device_info(entry: ConfigEntry) -> DeviceInfo:
@@ -28,11 +29,12 @@ def device_info(entry: ConfigEntry) -> DeviceInfo:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
-    rooms = {**entry.data, **entry.options}.get(CONF_ROOMS, DEFAULT_ROOMS)
+    rooms = {**entry.data, **entry.options}.get(CONF_ROOMS, [])
     entities: list[SensorEntity] = []
     for room in rooms:
-        entities.append(MarginSensor(entry, room))
-        entities.append(TimeToMinimumSensor(entry, room))
+        label = room_label(hass, room)
+        entities.append(MarginSensor(entry, room, label))
+        entities.append(TimeToMinimumSensor(entry, room, label))
     async_add_entities(entities)
 
 
@@ -69,9 +71,9 @@ class MarginSensor(_RoomSensor):
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_suggested_display_precision = 1
 
-    def __init__(self, entry: ConfigEntry, room: str) -> None:
+    def __init__(self, entry: ConfigEntry, room: str, label: str) -> None:
         super().__init__(entry, room)
-        self._attr_name = f"{room_label(room)} margin"
+        self._attr_name = f"{label} margin"
         self._attr_unique_id = f"{entry.entry_id}_{room}_margin"
         self._attr_extra_state_attributes = {}
 
@@ -91,9 +93,9 @@ class TimeToMinimumSensor(_RoomSensor):
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_native_value = None
 
-    def __init__(self, entry: ConfigEntry, room: str) -> None:
+    def __init__(self, entry: ConfigEntry, room: str, label: str) -> None:
         super().__init__(entry, room)
-        self._attr_name = f"{room_label(room)} time to minimum"
+        self._attr_name = f"{label} time to minimum"
         self._attr_unique_id = f"{entry.entry_id}_{room}_time_to_minimum"
         self._attr_extra_state_attributes = {"model": "not built yet", "room": room}
 

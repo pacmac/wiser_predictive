@@ -1,4 +1,5 @@
-"""Config flow: pick the rooms and the outside sensor. Editable later through the options flow."""
+"""Config flow: rooms are discovered from the Wiser integration, the outside sensor is the user's choice.
+Editable later through the options flow."""
 from __future__ import annotations
 
 from typing import Any
@@ -6,19 +7,32 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
-from homeassistant.core import callback
-from homeassistant.helpers import selector
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er, selector
 
-from .const import CONF_OUTSIDE, CONF_ROOMS, DEFAULT_OUTSIDE, DEFAULT_ROOMS, DOMAIN
+from . import model
+from .const import CONF_OUTSIDE, CONF_ROOMS, DOMAIN
 
 
-def _schema(rooms: list[str], outside: str) -> vol.Schema:
+def discover_rooms(hass: HomeAssistant) -> list[str]:
+    """Climate entities registered by the wiser integration that are rooms (not the hot water channel)."""
+    found = []
+    for entry in er.async_get(hass).entities.values():
+        if entry.platform == "wiser" and entry.domain == "climate":
+            state = hass.states.get(entry.entity_id)
+            if state is not None and model.is_room(state.attributes):
+                found.append(entry.entity_id)
+    return sorted(found)
+
+
+def _schema(rooms: list[str], outside: str | None) -> vol.Schema:
+    outside_key = vol.Required(CONF_OUTSIDE, default=outside) if outside else vol.Required(CONF_OUTSIDE)
     return vol.Schema(
         {
             vol.Required(CONF_ROOMS, default=rooms): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="climate", multiple=True)
             ),
-            vol.Required(CONF_OUTSIDE, default=outside): selector.EntitySelector(
+            outside_key: selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
             ),
         }
@@ -33,7 +47,7 @@ class WiserPredictiveConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
         if user_input is not None:
             return self.async_create_entry(title="Wiser Predictive", data=user_input)
-        return self.async_show_form(step_id="user", data_schema=_schema(DEFAULT_ROOMS, DEFAULT_OUTSIDE))
+        return self.async_show_form(step_id="user", data_schema=_schema(discover_rooms(self.hass), None))
 
     @staticmethod
     @callback
@@ -48,7 +62,5 @@ class PredictiveOptionsFlow(OptionsFlow):
         current = {**self.config_entry.data, **self.config_entry.options}
         return self.async_show_form(
             step_id="init",
-            data_schema=_schema(
-                current.get(CONF_ROOMS, DEFAULT_ROOMS), current.get(CONF_OUTSIDE, DEFAULT_OUTSIDE)
-            ),
+            data_schema=_schema(current.get(CONF_ROOMS, []), current.get(CONF_OUTSIDE)),
         )
