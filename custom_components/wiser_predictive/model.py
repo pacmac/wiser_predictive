@@ -108,6 +108,34 @@ def heat_needed(margin_c: float | None, was_on: bool, trigger: float) -> bool | 
     return was_on
 
 
+EPISODE_OVER_FLAGS = ("is_heating", "is_boosted", "is_override")  # Wiser's own room flags: heat is already being supplied
+
+
+def room_decision(attrs: Mapping[str, Any], was_on: bool, trigger: float) -> bool | None:
+    """heat_needed for one room from its climate attributes: the margin rule, off once heat is being supplied."""
+    m = margin(attrs)
+    if m is None:
+        return None
+    if any(attrs.get(flag) for flag in EPISODE_OVER_FLAGS):
+        return False
+    return heat_needed(m, was_on, trigger)
+
+
+def any_room_on(states: Iterable[bool | None]) -> bool | None:
+    """On if any room is on; off if at least one room is known and none is on; unknown only when none is known."""
+    known = [s for s in states if s is not None]
+    if not known:
+        return None
+    return any(known)
+
+
+def announcement(name: str, margin_c: float) -> str:
+    rounded = round(margin_c, 1)
+    if rounded == 0:
+        return f"{name} is at its minimum"
+    return f"{name} is {abs(rounded):.1f} degrees {'above' if rounded > 0 else 'below'} its minimum"
+
+
 def minimum_of(attrs: Mapping[str, Any]) -> float | None:
     """A passive room's minimum is its thermostat LOW; a non-passive room has one target and that is its minimum."""
     low = attrs.get("target_temp_low")

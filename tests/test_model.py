@@ -58,6 +58,35 @@ def test_heat_needed_is_unknown_without_a_margin():
     assert model.heat_needed(None, was_on=True, trigger=0.1) is None
 
 
+def test_room_decision_applies_the_margin_rule_to_a_rooms_attributes():
+    assert model.room_decision(LOUNGE, was_on=False, trigger=0.1) is True  # margin 0.1
+    assert model.room_decision(BED_3, was_on=False, trigger=0.1) is False  # margin 0.8
+
+
+def test_room_decision_is_unknown_without_a_reading():
+    assert model.room_decision(TOILET, was_on=False, trigger=0.1) is None
+
+
+def test_a_room_being_heated_boosted_or_overridden_is_off_even_below_its_minimum():
+    low = {"current_temperature": 12.3, "temperature": 12.5, "is_passive": False}
+    assert model.room_decision(low, was_on=True, trigger=0.1) is True
+    for flag in ("is_heating", "is_boosted", "is_override"):
+        assert model.room_decision({**low, flag: True}, was_on=True, trigger=0.1) is False, flag
+
+
+def test_announcement_says_where_the_room_is_relative_to_its_minimum():
+    assert model.announcement("Lounge", 0.1) == "Lounge is 0.1 degrees above its minimum"
+    assert model.announcement("Lounge", 0.0) == "Lounge is at its minimum"
+    assert model.announcement("Lounge", -0.2) == "Lounge is 0.2 degrees below its minimum"
+
+
+def test_house_state_is_on_if_any_room_is_on_off_if_one_is_known_unknown_only_if_none_is():
+    assert model.any_room_on([True, False, None]) is True
+    assert model.any_room_on([False, None]) is False  # a flat-battery room must not hold it unknown
+    assert model.any_room_on([None, None]) is None
+    assert model.any_room_on([]) is None
+
+
 HOT_WATER = {"current_temperature": None, "target_temp_low": 45.0, "target_temp_high": 55.0, "friendly_name": "Wiser Hot Water"}
 
 

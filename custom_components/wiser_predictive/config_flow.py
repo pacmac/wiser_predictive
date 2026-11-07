@@ -1,8 +1,9 @@
-"""Config flow: select the Wiser hub (skipped when there is only one), then the rooms and the outside sensor.
-Rooms are discovered from the selected hub. Editable later through the options flow (the hub is fixed)."""
+"""Config flow: select the Wiser hub (skipped when there is only one), then the rooms, the outside sensor, the trigger
+margin and the optional announcement. Rooms are discovered from the selected hub. Editable later through the options
+flow (the hub is fixed)."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 import voluptuous as vol
 
@@ -12,21 +13,39 @@ from homeassistant.helpers import selector
 
 from . import hub as hubs
 from . import model
-from .const import CONF_HUB, CONF_OUTSIDE, CONF_ROOMS, DOMAIN
+from .const import (
+    CONF_ANNOUNCE_DATA,
+    CONF_ANNOUNCE_SCRIPT,
+    CONF_HUB,
+    CONF_OUTSIDE,
+    CONF_ROOMS,
+    CONF_TRIGGER,
+    DEFAULT_TRIGGER,
+    DOMAIN,
+)
 
 
-def _schema(rooms: list[str], outside: str | None, allowed: list[str]) -> vol.Schema:
-    outside_key = vol.Required(CONF_OUTSIDE, default=outside) if outside else vol.Required(CONF_OUTSIDE)
-    return vol.Schema(
-        {
-            vol.Required(CONF_ROOMS, default=rooms): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="climate", multiple=True, include_entities=allowed)
-            ),
-            outside_key: selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
-            ),
-        }
+def _schema(rooms: list[str], allowed: list[str], current: Mapping[str, Any]) -> vol.Schema:
+    """`current` holds the values already chosen (empty on first setup)."""
+    fields: dict[Any, Any] = {}
+    fields[vol.Required(CONF_ROOMS, default=rooms)] = selector.EntitySelector(
+        selector.EntitySelectorConfig(domain="climate", multiple=True, include_entities=allowed)
     )
+    outside = current.get(CONF_OUTSIDE)
+    fields[vol.Required(CONF_OUTSIDE, default=outside) if outside else vol.Required(CONF_OUTSIDE)] = (
+        selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
+    )
+    fields[vol.Required(CONF_TRIGGER, default=current.get(CONF_TRIGGER, DEFAULT_TRIGGER))] = selector.NumberSelector(
+        selector.NumberSelectorConfig(min=0.0, max=1.0, step=0.1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
+    )
+    script = current.get(CONF_ANNOUNCE_SCRIPT)
+    fields[vol.Optional(CONF_ANNOUNCE_SCRIPT, description={"suggested_value": script})] = selector.EntitySelector(
+        selector.EntitySelectorConfig(domain="script")
+    )
+    fields[vol.Optional(CONF_ANNOUNCE_DATA, description={"suggested_value": current.get(CONF_ANNOUNCE_DATA)})] = (
+        selector.ObjectSelector()
+    )
+    return vol.Schema(fields)
 
 
 class WiserPredictiveConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -70,7 +89,7 @@ class WiserPredictiveConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
         return self.async_show_form(
             step_id="rooms",
-            data_schema=_schema(found, None, found),
+            data_schema=_schema(found, found, {}),
             errors=errors,
             description_placeholders={"hub": name},
         )
@@ -90,6 +109,6 @@ class PredictiveOptionsFlow(OptionsFlow):
         allowed = hubs.discover_rooms(self.hass, hub_id) if hub_id else []
         return self.async_show_form(
             step_id="init",
-            data_schema=_schema(current.get(CONF_ROOMS, []), current.get(CONF_OUTSIDE), allowed),
+            data_schema=_schema(current.get(CONF_ROOMS, []), allowed, current),
             description_placeholders={"hub": hubs.hub_name(self.hass, hub_id) if hub_id else "unknown"},
         )

@@ -38,18 +38,21 @@ Approved with a priority change: the integration must be visible inside HA befor
 - Installing it is a box change: `deploy.py` dry run first, `--go` copies files only, `--restart` (HA core restart, needed once for a new integration) only on Peter's go-ahead. The deploy backs up anything it overwrites and writes an apply row for the ledger.
 
 ## MODEL (model.py)
-Inputs per room: reading series (time, °C), minimum, outside temperature series.
-1. Fit over a window of at least 90 minutes (a shorter window is noise: the lounge sensor steps 0.1 °C). Candidate forms: linear, and Newton cooling `dT/dt = -k (T - To)`. The replay chooses between them, not opinion.
-2. `time_to_minimum` = time until the fitted curve reaches the minimum; unknown if the fit is rising, flat or the window is short.
-3. `lead` = measured boost heat-up time (8-28 min, median 11-13) plus a fixed buffer. The buffer is derived from the replay, not guessed.
-4. `heat_needed` is on when `time_to_minimum <= lead`, OR the margin is already below the buffer. Off when heating is on or the room is boosted/overridden (episode over). Hysteresis so a flickering reading does not flap it.
+DECIDED (AFK, 2026-11-07, from the replay): the MARGIN RULE. The time-to-minimum fits (linear, Newton) are built and tested but SHELVED: on the lounge's 9 touches they said 32-50 min too late at 30 min ahead, worst 150+, so no buffer can be derived from them. They stay in `model.py`; no entity uses them.
+Per room, each time its state changes:
+1. `margin` = reading minus the room's minimum.
+2. `heat_needed` is ON when `margin <= trigger`, OFF when `margin >= trigger + 0.2`, and keeps its state in between (hysteresis).
+3. A room that is being heated, boosted or overridden (`is_heating`, `is_boosted`, `is_override`, Wiser's own flags) is OFF: the episode is over.
+4. Unknown margin gives unknown, never off.
+Derived numbers (replay, 8 days, 9 touches of the lounge minimum): trigger 0.1 °C = one sensor step, the only offset of 0.1-0.4 that caught all 9 touches (13 fires, 4 false alarms, warning 11-120 min, median 71); the 0.2 °C hysteresis = two sensor steps, so a one-step flicker cannot flap it. NO cooldown: with the hysteresis, consecutive fires are never closer than 65 min. Known weakness: the shortest warning (11 min) is shorter than the longest boost heat-up (up to 28 min by the chart's measure).
+The thermal-mass options (time near the minimum plus outside temperature; cumulative degree-hours) are NOT built and remain open for testing against the replay.
 
 ## ENTITIES
 Per room: `sensor.<room>_time_to_minimum` (min), `sensor.<room>_margin` (°C above minimum).
-One `binary_sensor.heat_needed`, attributes: room that triggered, time_to_minimum, lead.
+One `binary_sensor.heat_needed`: ON if any room is on; OFF if at least one room is known and none is on; unknown only when every room is unknown (a room with a flat battery must not make it unknown for good). Attributes: per room margin and state, and the rooms that are on.
 
 ## CONFIG (config flow, editable in the HA UI)
-Outside sensor, rooms, buffer, announce target, heating-state sensor.
+Hub, rooms, outside sensor (kept for later signals; the margin rule does not use it), `trigger_margin` (default 0.1 °C, one sensor step), `announce_script` (optional script entity), `announce_data` (optional object merged into the script's variables, e.g. target and chime for a house with several sites). With no announce script nothing is announced.
 
 ## HUB (Peter, 2026-11-07)
 A house can have more than one Wiser hub (here two: `03E34F` has all the rooms; `05C5D8` has the boiler channels only). Each hub is its own `wiser` config entry, and each room device is linked to its hub (`via_device`).
@@ -71,7 +74,7 @@ The integration must work in any house with a Wiser system. No entity id, room n
 - House facts live in this spec's notes and the handover, not in `custom_components/`.
 
 ## STAGE 1 (the only stage in this spec)
-Announce only: `script.speak`, target `both` (uk + sg), cooldown 120 min. NO `climate.set_temperature`, no change to Boost on Demand.
+Announce only. When a room turns ON (never at startup), call the configured `announce_script` with variables `message` ("<room> is <margin> °C above its minimum") plus the user's `announce_data`. In this house that script is `script.speak` with `{target: both, chime: true}`; that is the user's configuration, not code. No cooldown (see MODEL). NO `climate.set_temperature`, no change to Boost on Demand.
 Later stages (raise the lounge target; retire Boost on Demand) need their own spec and Peter's go-ahead.
 
 ## TESTS AND PROOF
