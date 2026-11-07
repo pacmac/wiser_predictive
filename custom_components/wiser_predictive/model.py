@@ -93,6 +93,21 @@ def predict_newton(
     return Prediction(math.log((now_value - outside) / (minimum - outside)) / -slope, "ok")
 
 
+REARM = 0.2  # degrees C: two steps of the 0.1 C sensor, so a one-step flicker cannot flap the decision (matches replay.py)
+
+
+def heat_needed(margin_c: float | None, was_on: bool, trigger: float) -> bool | None:
+    """Margin rule. On at `trigger` degrees above the minimum or lower; off at trigger + REARM or higher; in between it
+    keeps its state. None when the margin is unknown, so it never claims 'off' while it cannot know."""
+    if margin_c is None:
+        return None
+    if margin_c <= trigger:
+        return True
+    if margin_c >= round(trigger + REARM, 2):
+        return False
+    return was_on
+
+
 def minimum_of(attrs: Mapping[str, Any]) -> float | None:
     """A passive room's minimum is its thermostat LOW; a non-passive room has one target and that is its minimum."""
     low = attrs.get("target_temp_low")

@@ -102,14 +102,23 @@ def resample(rows, start, now, step=SAMPLE_STEP):
 
 
 def heatups(rows, rise=HEATUP_RISE):
-    """Minutes from each boost starting until the reading is `rise` above where it was before the boost."""
+    """Minutes from each boost starting until the reading is `rise` above where it was before the boost.
+
+    The search runs past the end of the boost flag (a slow boost gets there after the flag has dropped) and stops at
+    the next boost, or when the reading falls back below where it started (the boost did not work).
+    """
     out = []
     for i, row in enumerate(rows):
         if not row[3] or (i > 0 and rows[i - 1][3]):
             continue
-        target = round((rows[i - 1][1] if i > 0 else row[1]) + rise, 2) - 1e-9
+        base = rows[i - 1][1] if i > 0 else row[1]
+        target = round(base + rise, 2) - 1e-9
+        flag_dropped = False
         for later in rows[i:]:
-            if not later[3]:
+            if later[3] and flag_dropped:
+                break
+            flag_dropped = flag_dropped or not later[3]
+            if later[1] < base - 1e-9:
                 break
             if later[1] >= target:
                 out.append((later[0] - row[0]) / MS_PER_MIN)

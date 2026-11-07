@@ -39,6 +39,25 @@ def test_no_minimum_gives_no_margin():
     assert model.margin({"current_temperature": 13.0}) is None
 
 
+def test_heat_needed_comes_on_at_the_trigger_margin_and_below():
+    assert model.heat_needed(0.1, was_on=False, trigger=0.1) is True
+    assert model.heat_needed(0.0, was_on=False, trigger=0.1) is True
+    assert model.heat_needed(-0.3, was_on=False, trigger=0.1) is True
+
+
+def test_heat_needed_is_off_well_above_the_trigger():
+    assert model.heat_needed(0.5, was_on=True, trigger=0.1) is False  # trigger + 0.2 or more: episode over
+
+
+def test_heat_needed_holds_its_state_in_between_so_a_one_step_flicker_does_not_flap_it():
+    assert model.heat_needed(0.2, was_on=True, trigger=0.1) is True
+    assert model.heat_needed(0.2, was_on=False, trigger=0.1) is False
+
+
+def test_heat_needed_is_unknown_without_a_margin():
+    assert model.heat_needed(None, was_on=True, trigger=0.1) is None
+
+
 HOT_WATER = {"current_temperature": None, "target_temp_low": 45.0, "target_temp_high": 55.0, "friendly_name": "Wiser Hot Water"}
 
 

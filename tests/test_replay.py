@@ -67,6 +67,17 @@ def test_heatup_is_minutes_from_boost_start_until_the_reading_is_0_3_higher():
     assert replay.heatups(r) == [20.0]  # boost starts row 1 (10 min), reading reaches 12.8 at row 3 (30 min)
 
 
-def test_heatup_never_reached_inside_the_boost_is_skipped():
-    r = rows((12.5, 12.5, False), (12.5, 15.5, True), (12.6, 15.5, True), (12.5, 12.5, False))
+def test_heatup_that_falls_back_below_where_it_started_is_skipped():
+    r = rows((12.5, 12.5, False), (12.5, 15.5, True), (12.6, 15.5, True), (12.4, 12.5, False), (12.9, 12.5, False))
     assert replay.heatups(r) == []
+
+
+def test_heatup_is_still_counted_when_the_reading_gets_there_after_the_boost_flag_ends():
+    # slow boosts: the flag is off by the time the reading is 0.3 C up. Dropping them would shorten every figure.
+    r = rows((12.5, 12.5, False), (12.5, 15.5, True), (12.6, 15.5, True), (12.6, 12.5, False), (12.8, 12.5, False))
+    assert replay.heatups(r) == [30.0]
+
+
+def test_heatup_search_stops_at_the_next_boost():
+    r = rows((12.5, 12.5, False), (12.5, 15.5, True), (12.5, 12.5, False), (12.5, 15.5, True), (12.9, 15.5, True))
+    assert replay.heatups(r) == [10.0]  # only the second boost reaches +0.3; the first must not claim it
