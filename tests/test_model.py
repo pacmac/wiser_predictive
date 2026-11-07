@@ -14,6 +14,13 @@ BED_3 = {"current_temperature": 12.8, "target_temp_low": 12.0, "target_temp_high
 TOILET = {"current_temperature": None, "target_temp_low": 12.0, "target_temp_high": 21.0, "is_passive": True}
 
 
+def test_lowest_margin_names_the_closest_room_and_ignores_rooms_without_a_reading():
+    assert model.lowest_margin({"a": 0.8, "b": 0.1, "c": None}) == ("b", 0.1)
+    assert model.lowest_margin({"a": 0.8, "b": -0.2}) == ("b", -0.2)
+    assert model.lowest_margin({"a": None}) is None
+    assert model.lowest_margin({}) is None
+
+
 def test_passive_room_minimum_is_the_low_value():
     assert model.minimum_of(BED_3) == 12.0
 

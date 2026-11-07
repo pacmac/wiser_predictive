@@ -1,12 +1,12 @@
-"""Per-room sensors. margin is real. time_to_minimum is unknown until the model is built (docs/SPEC.md)."""
+"""Sensors: the lowest margin (headline), a margin per room, the trigger in force and the hub (docs/SPEC.md, ENTITIES)."""
 from __future__ import annotations
 
 import inspect
 
-from homeassistant.helpers import device_registry as dr
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTemperature, UnitOfTime
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
@@ -15,7 +15,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 
 from . import model
 from . import hub as hubs
-from .const import CONF_HUB, CONF_ROOMS, DOMAIN
+from .const import CONF_HUB, CONF_ROOMS, CONF_TRIGGER, DEFAULT_TRIGGER, DOMAIN
 
 
 def room_label(hass: HomeAssistant, entity_id: str) -> str:
@@ -41,14 +41,18 @@ def device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     rooms = {**entry.data, **entry.options}.get(CONF_ROOMS, [])
+    registry = er.async_get(hass)
+    for stale in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if stale.unique_id.endswith("_time_to_minimum"):  # placeholder from the first build, removed: it never had a value
+            registry.async_remove(stale.entity_id)
     entities: list[SensorEntity] = []
     hub_id = entry.data.get(CONF_HUB)
     if hub_id:
         entities.append(HubSensor(hass, entry, hubs.hub_name(hass, hub_id)))
+    entities.append(TriggerSensor(hass, entry))
+    entities.append(LowestMarginSensor(hass, entry, rooms))
     for room in rooms:
-        label = room_label(hass, room)
-        entities.append(MarginSensor(hass, entry, room, label))
-        entities.append(TimeToMinimumSensor(hass, entry, room, label))
+        entities.append(MarginSensor(hass, entry, room, room_label(hass, room)))
     async_add_entities(entities)
 
 
@@ -108,24 +112,61 @@ class MarginSensor(_RoomSensor):
     def _refresh(self) -> None:
         attrs = self._room_attrs()
         self._attr_native_value = None if attrs is None else model.margin(attrs)
+        self._attr_available = self._attr_native_value is not None  # a thermostat with no reading is unavailable, not "unknown"
         self._attr_extra_state_attributes = (
             {} if attrs is None
             else {"reading": attrs.get("current_temperature"), "minimum": model.minimum_of(attrs), "room": self._room}
         )
 
 
-class TimeToMinimumSensor(_RoomSensor):
-    """Minutes until the room reaches its minimum. Unknown until the model exists; never a made-up value."""
+class TriggerSensor(SensorEntity):
+    """The trigger margin in force: heat is called when a room is this close to its minimum, or closer."""
 
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
-    _attr_native_value = None
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_name = "Trigger margin"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, room: str, label: str) -> None:
-        super().__init__(hass, entry, room)
-        self._attr_name = f"{label} time to minimum"
-        self._attr_unique_id = f"{entry.entry_id}_{room}_time_to_minimum"
-        self._attr_extra_state_attributes = {"model": "not built yet", "room": room}
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self._attr_native_value = float({**entry.data, **entry.options}.get(CONF_TRIGGER, DEFAULT_TRIGGER))
+        self._attr_unique_id = f"{entry.entry_id}_trigger_margin"
+        self._attr_device_info = device_info(hass, entry)
+
+
+class LowestMarginSensor(SensorEntity):
+    """The headline: how close the nearest room is to its minimum, and which room that is."""
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_name = "Lowest margin"
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, rooms: list[str]) -> None:
+        self._rooms = list(rooms)
+        self._attr_unique_id = f"{entry.entry_id}_lowest_margin"
+        self._attr_device_info = device_info(hass, entry)
+        self._attr_extra_state_attributes = {}
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(async_track_state_change_event(self.hass, self._rooms, self._on_change))
+        self._refresh()
+
+    @callback
+    def _on_change(self, event) -> None:
+        self._refresh()
+        self.async_write_ha_state()
 
     def _refresh(self) -> None:
-        return None
+        margins: dict[str, float | None] = {}
+        for room in self._rooms:
+            state = self.hass.states.get(room)
+            ok = state is not None and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+            margins[room] = model.margin(state.attributes) if ok else None
+        low = model.lowest_margin(margins)
+        self._attr_native_value = None if low is None else low[1]
+        self._attr_extra_state_attributes = {
+            "room": None if low is None else room_label(self.hass, low[0]),
+            "rooms_without_a_reading": [room_label(self.hass, r) for r, m in margins.items() if m is None],
+        }

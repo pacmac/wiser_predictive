@@ -139,6 +139,15 @@ def any_room_on(states: Iterable[bool | None]) -> bool | None:
     return any(known)
 
 
+def lowest_margin(margins: Mapping[str, float | None]) -> tuple[str, float] | None:
+    """(room, margin) of the room closest to, or furthest below, its minimum; None when no room has a margin."""
+    known = [(m, r) for r, m in margins.items() if m is not None]
+    if not known:
+        return None
+    m, r = min(known)
+    return r, m
+
+
 def announcement(name: str, margin_c: float) -> str:
     rounded = round(margin_c, 1)
     if rounded == 0:

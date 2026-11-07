@@ -48,7 +48,11 @@ Derived numbers (replay, 8 days, 9 touches of the lounge minimum): trigger 0.1 �
 The thermal-mass options (time near the minimum plus outside temperature; cumulative degree-hours) are NOT built and remain open for testing against the replay.
 
 ## ENTITIES
-Per room: `sensor.<room>_time_to_minimum` (min), `sensor.<room>_margin` (°C above minimum).
+The device page must say something at a glance, so the headline entities come first (Peter, 2026-11-07: "this page tells me nothing at all"; half the values were unknown placeholders):
+- `sensor.lowest_margin` (°C): the nearest room to its minimum; attributes `room` (which one) and `rooms_without_a_reading`.
+- `sensor.<room>_margin` (°C above minimum), one per room. A thermostat with no reading is UNAVAILABLE, not unknown.
+- `sensor.trigger_margin` (diagnostic): the trigger in force. `sensor.hub` (diagnostic): the selected hub.
+- `sensor.<room>_time_to_minimum` is REMOVED (it was a placeholder for the shelved fit and never had a value); the setup deletes the old registry entries.
 One `binary_sensor.heat_needed`: ON if any room is on; OFF if at least one room is known and none is on; unknown only when every room is unknown (a room with a flat battery must not make it unknown for good). Attributes: per room margin and state, and the rooms that are on.
 
 ## CONFIG (config flow, editable in the HA UI)

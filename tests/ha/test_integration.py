@@ -124,8 +124,11 @@ async def test_entities_show_real_margins_the_hub_and_unknown_placeholders(hass)
     await setup_entry(hass, ["climate.lounge", "climate.bed_3", "climate.toilet"])
     assert hass.states.get("sensor.wiser_predictive_lounge_margin").state == "0.1"
     assert hass.states.get("sensor.wiser_predictive_bed_3_margin").state == "0.8"
-    assert hass.states.get("sensor.wiser_predictive_toilet_margin").state == "unknown"
-    assert hass.states.get("sensor.wiser_predictive_bed_3_time_to_minimum").state == "unknown"
+    assert hass.states.get("sensor.wiser_predictive_toilet_margin").state == "unavailable"  # no reading from that thermostat
+    assert hass.states.get("sensor.wiser_predictive_bed_3_time_to_minimum") is None  # the placeholder is gone
+    low = hass.states.get("sensor.wiser_predictive_lowest_margin")
+    assert low.state == "0.1" and low.attributes["room"] == "Lounge" and low.attributes["rooms_without_a_reading"] == ["Toilet"]
+    assert hass.states.get("sensor.wiser_predictive_trigger_margin").state == "0.1"
     assert hass.states.get("sensor.wiser_predictive_hub").state == "Wiser HeatHub (AAA)"
     device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, next(iter(hass.config_entries.async_entries(DOMAIN))).entry_id)})
     hub = dr.async_get(hass).async_get_device(identifiers={("wiser", "hub-hub-a")})
@@ -163,6 +166,17 @@ async def test_heat_needed_follows_the_margin_rule_and_announces_once_per_episod
     await hass.async_block_till_done()
     assert hass.states.get(heat).state == "off"
     assert hass.states.get(heat).attributes["rooms_on"] == []
+
+
+async def test_the_old_time_to_minimum_entities_are_removed_on_setup(hass):
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
+    entry = MockConfigEntry(domain=DOMAIN, unique_id="hub-a", data={"hub": "hub-a", "rooms": ["climate.lounge"], "trigger_margin": 0.1})
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    old = registry.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_climate.lounge_time_to_minimum", config_entry=entry)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert registry.async_get(old.entity_id) is None
 
 
 async def test_a_flat_battery_room_does_not_hold_heat_needed_unknown(hass):
