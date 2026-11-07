@@ -5,11 +5,13 @@ Task: `predictive-integration`. History: `../inventory/docs/HANDOVER.md`, mcpp p
 ## GOAL
 Every Wiser room stays above its minimum. Heat is called while the room is still ABOVE the minimum, so stored fabric heat is never lost.
 Success test: over several days the reading never touches the minimum line, and `heat_needed` is on while the reading is still above it.
+Boost on Demand only stops the boiler cycling. It does not solve the real problem: by the time the boiler calls, the thermal mass (the fabric) has already fallen to a level that would have kicked in before Boost on Demand did, and that stored heat is expensive to win back (Peter, 2026-11-07). So "reaches the minimum" is already too late; the predictor's job is to act on the thermal mass before that.
 Lounge is the gate (not passive, minimum = its target, 12.5 now). Passive rooms: minimum = thermostat LOW (12.0). Watch bed_3 next.
 
 ## FORM
 Custom integration, domain `wiser_predictive`, in this repo. Installed by hand into `/config/custom_components/` on the box while developing; HACS later (already installed on the box).
-Replaces the YAML predictor (`pac_predictive_heat`, `predictive_lounge`, automation Predictive Heating). Replaces Boost on Demand only after days of charts prove it (Peter, 2026-11-06).
+Replaces the YAML predictor (`pac_predictive_heat`, `predictive_lounge`, automation Predictive Heating).
+It REPLACES Boost on Demand and does NOT work with it (Peter, 2026-11-07, restating 2026-11-06): no input, trigger, condition or state of that automation is ever read or relied on, and nothing is designed to complement it. Boost on Demand stays untouched, and active, only until days of charts prove the predictor; then it is retired. A room's own Wiser `is_boosted`/`is_override` flags are Wiser state, not Boost on Demand, and may be read.
 
 ## LAYOUT
 ```
@@ -21,6 +23,8 @@ custom_components/wiser_predictive/
   __init__.py  config_flow.py  sensor.py  binary_sensor.py  translations/en.json
 tests/              pytest on model.py; fixtures cut from the archived history
 deploy.py           copy the integration to the box: dry run by default, --go copies, --restart separate
+replay.py           development tool: runs archived history through model.py; --fetch pulls one sensor's history (read-only)
+data/               fetched sensor history for the replay (git-ignored)
 docs/SPEC.md
 ```
 Only files in this layout are in scope.
