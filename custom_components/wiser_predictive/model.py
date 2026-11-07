@@ -121,14 +121,52 @@ def hub_link(hub_device_id: str | None, hub_identifiers: Iterable[tuple[str, str
 EPISODE_OVER_FLAGS =("is_heating", "is_boosted", "is_override")  # Wiser's own room flags: heat is already being supplied
 
 
-def room_decision(attrs: Mapping[str, Any], was_on: bool, trigger: float) -> bool | None:
-    """heat_needed for one room from its climate attributes: the margin rule, off once heat is being supplied."""
-    m = margin(attrs)
-    if m is None:
+_AUTO: Any = object()
+
+
+def room_decision(attrs: Mapping[str, Any], was_on: bool, trigger: float, margin_c: Any = _AUTO) -> bool | None:
+    """heat_needed for one room from its climate attributes: the margin rule, off once heat is being supplied.
+    margin_c is the margin to use (MinimumMemory's); by default it is worked out from the attributes."""
+    if margin_c is _AUTO:
+        margin_c = margin(attrs)
+    if attrs.get("current_temperature") is None:
         return None
     if any(attrs.get(flag) for flag in EPISODE_OVER_FLAGS):
-        return False
-    return heat_needed(m, was_on, trigger)
+        return False  # heat is being supplied, whatever the margin says
+    return heat_needed(margin_c, was_on, trigger)
+
+
+MINIMUM_RAISED_BY = ("is_boosted", "is_override")  # while either is set, a non-passive room's target is the raised one
+
+
+class MinimumMemory:
+    """A room's minimum, kept through a boost.
+
+    A boost or override raises the thermostat's target (lounge: 12.5 -> 20.5), so reading minus target is nonsense while
+    it lasts. Passive rooms are not affected (their minimum is the LOW setting). For the others, the last minimum seen
+    before the raise is held until it ends; if the raise was already on when this started, there is no minimum to hold
+    and the margin is unknown (never a made-up number)."""
+
+    def __init__(self) -> None:
+        self._held: dict[str, float] = {}
+
+    def minimum(self, room: str, attrs: Mapping[str, Any]) -> tuple[float | None, bool]:
+        """(minimum, held). held is True when the minimum is the remembered pre-boost one."""
+        current = minimum_of(attrs)
+        raised = attrs.get("target_temp_low") is None and any(attrs.get(f) for f in MINIMUM_RAISED_BY)
+        if raised:
+            return self._held.get(room), True
+        if current is not None:
+            self._held[room] = current
+        return current, False
+
+    def margin(self, room: str, attrs: Mapping[str, Any]) -> tuple[float | None, float | None, bool]:
+        """(margin, minimum, held)."""
+        minimum, held = self.minimum(room, attrs)
+        reading = attrs.get("current_temperature")
+        if reading is None or minimum is None:
+            return None, minimum, held
+        return round(float(reading) - minimum, 2), minimum, held
 
 
 def any_room_on(states: Iterable[bool | None]) -> bool | None:

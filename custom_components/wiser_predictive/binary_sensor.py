@@ -34,6 +34,7 @@ class HeatNeeded(BinarySensorEntity):
         self._data: dict[str, Any] = dict(data) if isinstance(data, dict) else {}
         self._on: dict[str, bool | None] = {}
         self._margin: dict[str, float | None] = {}
+        self._memory = model.MinimumMemory()
         self._attr_unique_id = f"{entry.entry_id}_heat_needed"
         self._attr_device_info = device_info(hass, entry)
         self._attr_extra_state_attributes = {"rooms": {}, "rooms_on": []}
@@ -57,8 +58,11 @@ class HeatNeeded(BinarySensorEntity):
         for room in self._rooms:
             state = self.hass.states.get(room)
             attrs = None if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN) else state.attributes
-            self._margin[room] = None if attrs is None else model.margin(attrs)
-            self._on[room] = None if attrs is None else model.room_decision(attrs, bool(self._on.get(room)), self._trigger)
+            margin = None if attrs is None else self._memory.margin(room, attrs)[0]
+            self._margin[room] = margin
+            self._on[room] = (
+                None if attrs is None else model.room_decision(attrs, bool(self._on.get(room)), self._trigger, margin)
+            )
         self._attr_is_on = model.any_room_on(self._on.values())
         self._attr_extra_state_attributes = {
             "rooms": {r: {"margin": self._margin.get(r), "heat_needed": self._on.get(r)} for r in self._rooms},

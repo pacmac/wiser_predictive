@@ -108,14 +108,17 @@ class MarginSensor(_RoomSensor):
         self._attr_name = f"{label} margin"
         self._attr_unique_id = f"{entry.entry_id}_{room}_margin"
         self._attr_extra_state_attributes = {}
+        self._memory = model.MinimumMemory()
 
     def _refresh(self) -> None:
         attrs = self._room_attrs()
-        self._attr_native_value = None if attrs is None else model.margin(attrs)
-        self._attr_available = self._attr_native_value is not None  # a thermostat with no reading is unavailable, not "unknown"
+        margin, minimum, held = (None, None, False) if attrs is None else self._memory.margin(self._room, attrs)
+        self._attr_native_value = margin
+        self._attr_available = margin is not None  # a thermostat with no reading is unavailable, not "unknown"
         self._attr_extra_state_attributes = (
             {} if attrs is None
-            else {"reading": attrs.get("current_temperature"), "minimum": model.minimum_of(attrs), "room": self._room}
+            else {"reading": attrs.get("current_temperature"), "minimum": minimum, "minimum_held_during_boost": held,
+                  "room": self._room}
         )
 
 
@@ -148,6 +151,7 @@ class LowestMarginSensor(SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_lowest_margin"
         self._attr_device_info = device_info(hass, entry)
         self._attr_extra_state_attributes = {}
+        self._memory = model.MinimumMemory()
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(async_track_state_change_event(self.hass, self._rooms, self._on_change))
@@ -163,7 +167,7 @@ class LowestMarginSensor(SensorEntity):
         for room in self._rooms:
             state = self.hass.states.get(room)
             ok = state is not None and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
-            margins[room] = model.margin(state.attributes) if ok else None
+            margins[room] = self._memory.margin(room, state.attributes)[0] if ok else None
         low = model.lowest_margin(margins)
         self._attr_native_value = None if low is None else low[1]
         self._attr_extra_state_attributes = {

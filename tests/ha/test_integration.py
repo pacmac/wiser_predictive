@@ -168,6 +168,31 @@ async def test_heat_needed_follows_the_margin_rule_and_announces_once_per_episod
     assert hass.states.get(heat).attributes["rooms_on"] == []
 
 
+async def test_a_boost_raises_the_target_but_margins_stay_against_the_real_minimum(hass):
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
+    await setup_entry(hass, ["climate.lounge"])
+    margin = "sensor.wiser_predictive_lounge_margin"
+    assert hass.states.get(margin).state == "0.1"
+    hass.states.async_set("climate.lounge", "auto", {**LOUNGE, "current_temperature": 17.6, "temperature": 20.5,
+                                                    "is_boosted": True, "is_override": True, "is_heating": True})
+    await hass.async_block_till_done()
+    boosted = hass.states.get(margin)
+    assert boosted.state == "5.1" and boosted.attributes["minimum"] == 12.5 and boosted.attributes["minimum_held_during_boost"]
+    assert hass.states.get("sensor.wiser_predictive_lowest_margin").state == "5.1"
+    assert hass.states.get("binary_sensor.wiser_predictive_heat_needed").state == "off"
+    hass.states.async_set("climate.lounge", "auto", {**LOUNGE, "current_temperature": 17.0})
+    await hass.async_block_till_done()
+    assert hass.states.get(margin).state == "4.5" and not hass.states.get(margin).attributes["minimum_held_during_boost"]
+
+
+async def test_started_in_the_middle_of_a_boost_the_margin_is_unavailable_not_nonsense(hass):
+    boosted = {**LOUNGE, "current_temperature": 17.6, "temperature": 20.5, "is_boosted": True, "is_override": True}
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": boosted})
+    await setup_entry(hass, ["climate.lounge"])
+    assert hass.states.get("sensor.wiser_predictive_lounge_margin").state == "unavailable"
+    assert hass.states.get("sensor.wiser_predictive_lowest_margin").state == "unknown"
+
+
 async def test_the_old_time_to_minimum_entities_are_removed_on_setup(hass):
     add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
     entry = MockConfigEntry(domain=DOMAIN, unique_id="hub-a", data={"hub": "hub-a", "rooms": ["climate.lounge"], "trigger_margin": 0.1})

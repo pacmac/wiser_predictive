@@ -21,6 +21,30 @@ def test_lowest_margin_names_the_closest_room_and_ignores_rooms_without_a_readin
     assert model.lowest_margin({}) is None
 
 
+BOOSTED_LOUNGE = {"current_temperature": 17.6, "temperature": 20.5, "is_passive": False, "is_boosted": True, "is_override": True, "is_heating": True}
+
+
+def test_a_boost_raises_the_target_but_the_remembered_minimum_is_kept():
+    mem = model.MinimumMemory()
+    assert mem.margin("lounge", LOUNGE) == (0.1, 12.5, False)
+    assert mem.margin("lounge", BOOSTED_LOUNGE) == (5.1, 12.5, True)  # not 17.6 - 20.5 = -2.9
+    assert mem.margin("lounge", LOUNGE) == (0.1, 12.5, False)  # boost over: the live target again
+
+
+def test_a_boost_already_on_when_started_has_no_known_minimum_so_the_margin_is_unknown():
+    assert model.MinimumMemory().margin("lounge", BOOSTED_LOUNGE) == (None, None, True)
+
+
+def test_a_passive_room_is_not_affected_by_a_boost():
+    assert model.MinimumMemory().margin("bed", {**BED_3, "is_boosted": True, "is_override": True}) == (0.8, 12.0, False)
+
+
+def test_a_new_target_set_by_hand_is_learned_when_no_boost_is_on():
+    mem = model.MinimumMemory()
+    mem.margin("lounge", LOUNGE)
+    assert mem.margin("lounge", {**LOUNGE, "temperature": 13.0, "current_temperature": 13.4}) == (0.4, 13.0, False)
+
+
 def test_passive_room_minimum_is_the_low_value():
     assert model.minimum_of(BED_3) == 12.0
 
