@@ -75,11 +75,12 @@ function heatSpans(D) {
 class WiserPredictivePanel extends HTMLElement {
   constructor() {
     super();
-    this._days = 3; this._entry = null; this._room = null; this._data = null; this._hass = null; this._narrow = false;
+    this._days = 3; this._cold = 0; this._entry = null; this._room = null; this._data = null; this._hass = null; this._narrow = false;
     const root = this.attachShadow({ mode: 'open' });
     root.innerHTML = `<style>${STYLE}</style><main>
       <div class="bar"><div class="left"><span id="menu"></span><h1 id="title">Predictive Heating</h1></div>
         <div class="ctl"><select id="room" aria-label="Room" hidden></select>
+          <select id="cold" aria-label="What if the weather turns colder" title="Shifts the forecast down to see how the prediction reacts"><option value="0">Forecast as it is</option><option value="3">What if 3° colder</option><option value="5">What if 5° colder</option><option value="8">What if 8° colder</option></select>
           <div class="btns" role="group" aria-label="Time window"><button data-days="3" aria-pressed="true">3 days</button><button data-days="10" aria-pressed="false">10 days</button></div></div></div>
       <div class="story" id="story"></div>
       <div id="readout">Move over the chart to read the values at that time.</div>
@@ -91,6 +92,7 @@ class WiserPredictivePanel extends HTMLElement {
       root.querySelectorAll('button[data-days]').forEach(o => o.setAttribute('aria-pressed', o === b));
       this._load();
     }));
+    this.$('cold').addEventListener('change', e => { this._cold = +e.target.value; this._load(); });
     this.$('room').addEventListener('change', e => { const [entry, room] = e.target.value.split('|'); this._entry = entry; this._room = room; this._load(); });
     new ResizeObserver(() => { clearTimeout(this._rt); this._rt = setTimeout(() => this._data && this._render(), 80); }).observe(this);
   }
@@ -110,7 +112,7 @@ class WiserPredictivePanel extends HTMLElement {
   async _load() {
     if (!this._hass) return;
     try {
-      const r = await this._hass.callWS({ type: 'wiser_predictive/chart', days: this._days, ...(this._entry ? { entry_id: this._entry } : {}), ...(this._room ? { room: this._room } : {}) });
+      const r = await this._hass.callWS({ type: 'wiser_predictive/chart', days: this._days, outside_offset: -this._cold, ...(this._entry ? { entry_id: this._entry } : {}), ...(this._room ? { room: this._room } : {}) });
       this._entry = r.entry_id; this._room = r.room; this._data = r.chart; this._fillRooms(r);
       if (!r.chart) { this.$('chart').innerHTML = '<div class="empty">No rooms are chosen. Add rooms in the Wiser Predictive options.</div>'; this.$('story').innerHTML = ''; return; }
       this._story(); this._render(); this._notes();
@@ -137,14 +139,27 @@ class WiserPredictivePanel extends HTMLElement {
     };
     const heats = heatSpans(D).filter(([, b]) => b > x0), mins = Math.round(heats.reduce((s, [a, b]) => s + (Math.min(b, D.now) - Math.max(a, x0)) / 60, 0));
     const when = heats.slice(-3).map(([a]) => fmtT(a, { weekday: 'short', hour: '2-digit', minute: '2-digit' })).join(', ');
-    this.$('story').innerHTML = sum(D.reading, 'Inside', '--in') + sum(D.outside, 'Outside', '--out') +
+    const pr = D.prediction;
+    let predicted = '';
+    if (pr) {
+      const when = t => fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }), lowF = pr.outside_low;
+      const out = lowF ? ` Outside forecast low ${num(lowF[1])}° at ${when(lowF[0])}.` : '';
+      const v = pr.reaches_at ? `Reaches ${num(pr.minimum)}° at ${when(pr.reaches_at)}` : `Stays above ${num(pr.minimum)}°`;
+      const d = pr.reaches_at
+        ? `If nothing heats it. Heat is needed by ${when(pr.call_by)}: once heat is called the room stops falling within ${Math.round(pr.lead_s / 60)} min.${out}`
+        : `For the next 24 h if nothing heats it. Lowest ${num(pr.lowest[1])}° at ${when(pr.lowest[0])}.${out}`;
+      predicted = `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Prediction</div><div class="v">${v}</div>
+        <div class="d">${this._cold ? `<b>What if: outside ${this._cold}° colder than forecast.</b> ` : ''}${d}${pr.heating_now ? ' Heating is on now; this is what happens if it stops now.' : ''}</div>
+        <div class="d">Learned from 10 days: cools over ${pr.tau_h} h. Minimum is ${pr.minimum_source}.</div></div>`;
+    }
+    this.$('story').innerHTML = predicted + sum(D.reading, 'Inside', '--in') + sum(D.outside, 'Outside', '--out') +
       `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Heating on</div><div class="v">${heats.length} ${heats.length === 1 ? 'time' : 'times'}, ${mins} min in all</div>
         <div class="d">${heats.length ? `Latest: ${when}.` : 'It did not come on.'}</div></div>`;
   }
   _notes() {
     const D = this._data;
     this.$('note').textContent = (D.notes.length ? D.notes.join(' ') + ' ' : '') +
-      `Recorded history up to ${fmtT(D.now, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}. Heating is the room's boost and heating periods from Wiser. The prediction is added to this chart in the next stage.`;
+      `Recorded history up to ${fmtT(D.now, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}. Heating is the room's boost and heating periods from Wiser. The dotted line is the predicted temperature if no heat is supplied, from the room's own cooling and the outside forecast.`;
   }
 
   _render() {
@@ -152,20 +167,21 @@ class WiserPredictivePanel extends HTMLElement {
     if (!D.reading.length) { root.innerHTML = '<div class="empty">No readings were recorded for this room in this window.</div>'; return; }
     const W = Math.max(320, root.clientWidth || 800), days = this._days, x0 = D.now - days * 86400, x1 = D.end;
     const X = t => LEFT + (t - x0) / (x1 - x0) * (W - LEFT - RIGHT), css = n => this._css(n);
-    const heats = heatSpans(D).filter(([, b]) => b > x0);
+    const heats = heatSpans(D).filter(([, b]) => b > x0), pr = D.prediction;
     const panels = [
-      { id: 'in', h: 260, title: `Inside ${D.name}, °C`, color: '--in', lines: [{ data: D.reading, w: 2.6 }] },
+      { id: 'in', h: 260, title: `Inside ${D.name}, °C`, color: '--in', extra: pr ? [pr.minimum, ...pr.curve.map(c => c[1])] : [],
+        lines: [{ data: D.reading, w: 2.6 }, ...(pr ? [{ data: pr.curve, w: 2.4, dash: '2 5' }] : [])] },
       { id: 'out', h: 170, title: 'Outside, °C', color: '--out', lines: [{ data: D.outside, w: 2.4 }, { data: D.forecast, w: 2.4, dash: '6 4' }] },
     ];
     let y = 4, body = '', first = null;
     for (const p of panels) {
-      const vals = p.lines.flatMap(l => visible(l.data, x0, x1).map(q => q[1]));
+      const vals = [...p.lines.flatMap(l => visible(l.data, x0, x1).map(q => q[1])), ...(p.extra || [])];
       if (!vals.length) { continue; }
       let lo = Math.min(...vals), hi = Math.max(...vals); const pad = Math.max((hi - lo) * .12, .4); lo -= pad; hi += pad;
       const top = y + TITLE, bot = top + p.h, Y = v => bot - (v - lo) / (hi - lo) * p.h;
       first = first ?? top;
       body += `<text class="pt" x="${LEFT}" y="${y + 16}">${p.title.replace(/</g, '&lt;')}</text>`;
-      for (const v of niceTicks(lo, hi, 4)) body += `<line x1="${LEFT}" x2="${W - RIGHT}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css('--grid')}"/><text class="mono" x="${LEFT - 8}" y="${Y(v) + 4}" text-anchor="end">${v.toFixed(v % 1 ? 1 : 0)}°</text>`;
+      for (const v of niceTicks(lo, hi, p.h > 200 ? 6 : 4)) body += `<line x1="${LEFT}" x2="${W - RIGHT}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css('--grid')}"/><text class="mono" x="${LEFT - 8}" y="${Y(v) + 4}" text-anchor="end">${v.toFixed(v % 1 ? 1 : 0)}°</text>`;
       const nowX = X(D.now);
       body += `<rect x="${nowX}" y="${top}" width="${Math.max(0, W - RIGHT - nowX)}" height="${p.h}" fill="${css('--fc')}"/>`;
       for (const [a, b] of heats) body += `<rect x="${X(Math.max(a, x0))}" y="${top}" width="${Math.max(2, X(b) - X(Math.max(a, x0)))}" height="${p.h}" fill="${css('--heat')}"/>`;
@@ -175,6 +191,15 @@ class WiserPredictivePanel extends HTMLElement {
         body += `<path d="${pts.map(([t, v], i) => (i ? 'L' : 'M') + X(t) + ' ' + Y(v)).join(' ')}" fill="none" stroke="${css(p.color)}" stroke-width="${l.w}" ${l.dash ? `stroke-dasharray="${l.dash}"` : ''} stroke-linejoin="round" stroke-linecap="round"/>`;
       }
       body += '</g>';
+      if (p.id === 'in' && pr) {  /* the room's minimum, and the moment heat must be called if the room is left alone */
+        body += `<line x1="${LEFT}" x2="${W - RIGHT}" y1="${Y(pr.minimum)}" y2="${Y(pr.minimum)}" stroke="${css('--heat-ink')}" stroke-width="1.5" stroke-dasharray="7 4"/>`;
+        body += `<text x="${LEFT + 6}" y="${Y(pr.minimum) - 5}" class="heat">minimum ${num(pr.minimum)}°</text>`;
+        if (pr.call_by && pr.call_by <= x1) {
+          const cx = X(pr.call_by);
+          body += `<line x1="${cx}" x2="${cx}" y1="${top}" y2="${bot}" stroke="${css('--heat-ink')}" stroke-width="2"/><circle cx="${X(pr.reaches_at)}" cy="${Y(pr.minimum)}" r="5" fill="${css('--heat-ink')}"/>`;
+          body += `<text class="heat" x="${cx - 5}" y="${top + 26}" text-anchor="${cx > W - 160 ? 'end' : 'start'}" ${cx > W - 160 ? '' : `dx="10"`}>heat by ${hhmm(pr.call_by)}</text>`;
+        }
+      }
       if (p.id === 'out' && D.forecast.length) body += `<text x="${X(D.now) + 6}" y="${top + 14}">forecast →</text>`;
       y = bot + GAP;
     }

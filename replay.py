@@ -270,6 +270,94 @@ def fetch(entity, days, out, attrs=None):
     print(f"{entity}: {len(series)} readings -> {out}")
 
 
+# --- the thermal model: fit on the early history, predict the later history ------------------------------------------------
+
+MODEL_ROOMS = ("lounge", "bed_1", "bed_2", "bed_3", "bath", "kitchen")
+MODEL_HORIZONS = (1, 2, 4, 6, 12)  # hours ahead
+TRAIN_FRACTION = 0.6  # the first 6 of 10 days train, the last 4 test: the model never sees the days it is scored on
+OUTSIDE_FILE = "sensor.stats_outside_temperature.json"
+# climate attribute order saved by `--fetch climate.wiser_<room> --attrs ...`
+ATTR_ORDER = ["current_temperature", "temperature", "target_temp_low", "percentage_demand", "is_heating", "is_boosted",
+              "is_override", "is_calling_for_heat", "current_schedule_temp"]
+
+
+def _load_thermal():
+    path = ROOT / "custom_components" / "wiser_predictive" / "thermal.py"
+    spec = importlib.util.spec_from_file_location("wiser_predictive_thermal", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["wiser_predictive_thermal"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+thermal = _load_thermal()
+
+
+def room_grid(rows, outside):
+    """(temps, heating, outside) on the thermal model's grid. rows are [ms, attr1, ...] (ATTR_ORDER); outside is [[ms, C], ...]."""
+    climate = [(r[0] / 1000.0, dict(zip(ATTR_ORDER, r[1:]))) for r in rows]
+    prepared = thermal.prepare(climate, [(o[0] / 1000.0, o[1]) for o in outside if o[1] is not None])
+    _, temps, heating, outs = prepared
+    return temps, heating, outs
+
+
+def model_scores(temps, heating, outs):
+    """Fit on the first TRAIN_FRACTION, then from every hour in the rest predict each horizon ahead where the heating stayed off.
+    The outside temperature used for the prediction is the measured one (a perfect forecast), so this is the best the model can do.
+    Returns (params, {horizon: {"stays": [errors], "no_outside": [...], "model": [...]}})."""
+    n = len(temps)
+    split = int(n * TRAIN_FRACTION)
+    train = thermal.cooling_samples(temps[:split], heating[:split], outs[:split])
+    full = thermal.fit(train)
+    if full is None:
+        return None, {}
+    # the control: same fit with the outside term left out
+    rows = [(1.0, t) for t, _, _ in train]
+    ys = [r for _, _, r in train]
+    a = [[sum(r[i] * r[j] for r in rows) for j in range(2)] for i in range(2)]
+    b = [sum(r[i] * y for r, y in zip(rows, ys)) for i in range(2)]
+    c = thermal._solve(a, b)
+    flat = thermal.Params(c[0], c[1], 0.0, len(train))
+    steps_per_hour = 3600 // thermal.STEP
+    res = {h: {"stays": [], "no_outside": [], "model": []} for h in MODEL_HORIZONS}
+    since, last = [], -10**9
+    for i in range(n):
+        if heating[i]:
+            last = i
+        since.append(i - last)
+    for i in range(split, n - max(MODEL_HORIZONS) * steps_per_hour, steps_per_hour):
+        if temps[i] is None or since[i] < thermal.SETTLE or outs[i] is None:
+            continue
+        for h in MODEL_HORIZONS:
+            j = i + h * steps_per_hour
+            if any(heating[i:j + 1]) or temps[j] is None or any(o is None for o in outs[i:j]):
+                continue
+            res[h]["stays"].append(temps[j] - temps[i])
+            res[h]["model"].append(thermal.simulate(full, temps[i], outs[i + 1:j + 1])[-1] - temps[j])
+            res[h]["no_outside"].append(thermal.simulate(flat, temps[i], outs[i + 1:j + 1])[-1] - temps[j])
+    return full, res
+
+
+def report_model(data_dir, rooms):
+    d = pathlib.Path(data_dir)
+    outside = json.load(open(d / OUTSIDE_FILE))
+    for room in rooms:
+        rows = json.load(open(d / f"climate.wiser_{room}.json"))
+        params, res = model_scores(*room_grid(rows, outside))
+        if params is None:
+            print(f"\n=== {room}: not enough free cooling to learn from")
+            continue
+        eq = " / ".join(f"{params.equilibrium(o):.1f}" for o in (5, 8, 11))
+        print(f"\n=== {room}: {params.n} training windows, cooling time constant {params.tau_h:.1f} h, settles at {eq} C when it is 5 / 8 / 11 C outside")
+        print(f"{'ahead':>6} {'n':>4} | average error, C: {'stays':>7} {'no outside':>11} {'with outside':>13} | with outside: median, 90th percentile")
+        for h in MODEL_HORIZONS:
+            r = res[h]
+            if not r["model"]:
+                continue
+            mae = lambda xs: statistics.mean(abs(x) for x in xs)
+            print(f"{h:>5}h {len(r['model']):>4} | {'':18}{mae(r['stays']):>7.2f} {mae(r['no_outside']):>11.2f} {mae(r['model']):>13.2f} | {statistics.median(r['model']):+.2f}, {pct([abs(x) for x in r['model']], 90):.2f}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--archive")
@@ -279,7 +367,10 @@ def main():
     ap.add_argument("--days", type=int, default=10)
     ap.add_argument("--out")
     ap.add_argument("--attrs", help="with --fetch: comma-separated attribute names to take instead of the state")
+    ap.add_argument("--model", metavar="DATA_DIR", help="fit the thermal model per room on the early history and score it on the rest")
     args = ap.parse_args()
+    if args.model:
+        return report_model(args.model, args.room or MODEL_ROOMS)
     if args.fetch:
         if not args.out:
             sys.exit("--fetch needs --out FILE")

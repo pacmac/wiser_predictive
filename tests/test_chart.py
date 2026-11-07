@@ -14,6 +14,7 @@ def _load(name, path):
     return mod
 
 
+sys.path.insert(0, str(_root / "custom_components" / "wiser_predictive"))  # series.py imports thermal and model as plain modules
 series = _load("wiser_predictive_series", _root / "custom_components" / "wiser_predictive" / "series.py")
 chart = _load("chart_tool", _root / "chart.py")
 

@@ -8,7 +8,33 @@ from __future__ import annotations
 import datetime
 from typing import Any, Iterable, Mapping, Sequence
 
+try:
+    from . import model, thermal
+except ImportError:  # loaded as plain modules by chart.py and the tests
+    import model
+    import thermal
+
 HORIZON_H = 24  # hours of forecast drawn ahead of now (docs/SPEC.md, VISUALISATION: past days to 24 h ahead)
+
+
+def predict(climate, outside, forecast, now: float, low: float | None, heating_now: bool) -> tuple[dict[str, Any] | None, list[str]]:
+    """Learn the room's cooling from its history and predict the next day. Returns (prediction or None, notes saying why not).
+    low is the room's own LOW setting if it has one; otherwise its floor is the lowest target it held for an hour or more."""
+    notes: list[str] = []
+    prepared = thermal.prepare(climate, outside)
+    params = None if prepared is None else thermal.fit(thermal.cooling_samples(*prepared[1:]))
+    if params is None:
+        return None, ["Not enough free-cooling history yet to learn this room's cooling: it needs a day or more with the heating off."]
+    readings = [(t, a["current_temperature"]) for t, a in sorted(climate, key=lambda r: r[0]) if a.get("current_temperature") is not None]
+    minimum, source = (low, "its low setting") if low is not None else (thermal.held_floor(climate), "the lowest target it held for an hour or more")
+    if not readings or minimum is None or not outside:
+        return None, ["No minimum or no current reading for this room, so no prediction."]
+    result = thermal.predict(params, now, float(readings[-1][1]), minimum, forecast, sorted(outside)[-1][1])
+    if "error" in result:
+        return None, [f"No prediction: {result['error']}."]
+    result["minimum_source"] = source
+    result["heating_now"] = heating_now
+    return result, notes
 
 
 def spans(points: Sequence[tuple[float, Any]]) -> list[tuple[float, float]]:
@@ -39,6 +65,7 @@ def build(
     now: float,
     notes: Sequence[str] = (),
     built: str | None = None,
+    prediction: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """climate is [(seconds, attributes)] of the room's climate entity; outside and forecast are [(seconds, degrees C)]."""
     rows = sorted(climate, key=lambda r: r[0])
@@ -54,6 +81,7 @@ def build(
         "forecast": _pairs((t, v) for t, v in forecast if t >= now - 3600),
         "heating": [[round(a), round(b)] for a, b in heating],
         "boost": [[round(a), round(b)] for a, b in boost],
+        "prediction": dict(prediction) if prediction else None,
         "notes": list(notes),
         "built": built or datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="minutes"),
     }

@@ -17,11 +17,13 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from . import history, series
+from . import history, model, series
 from .const import CONF_OUTSIDE, CONF_ROOMS, CONF_WEATHER, DOMAIN
 from .sensor import room_label
 
 _LOGGER = logging.getLogger(__name__)
+
+LEARN_DAYS = 10  # days of history the model learns from: the replay trained on 6 and scored on the next 4 of these 10
 
 STATIC_URL = "/wiser_predictive_static"
 PANEL_PATH = "wiser-predictive"
@@ -54,12 +56,24 @@ def forecast_series(rows: list[dict[str, Any]]) -> list[tuple[float, float]]:
     return out
 
 
+def predict_room(hass, room, climate, outside, forecast, now, notes: list[str]) -> dict[str, Any] | None:
+    """Learn the room's cooling from its recorded history, then predict the next day with the forecast. Says why when it cannot."""
+    state = hass.states.get(room)
+    attrs = state.attributes if state is not None else {}
+    low = model.minimum_of(attrs) if attrs.get("target_temp_low") is not None else None
+    result, why = series.predict(climate, outside, forecast, now, low, bool(attrs.get("is_heating") or attrs.get("is_boosted")))
+    notes.extend(why)
+    return result
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "wiser_predictive/chart",
         vol.Optional("entry_id"): str,
         vol.Optional("room"): str,
         vol.Optional("days", default=3): vol.All(int, vol.Range(min=1, max=10)),
+        # What-if: degrees C added to the forecast, to see how the prediction reacts to a colder spell. Display only.
+        vol.Optional("outside_offset", default=0.0): vol.All(vol.Coerce(float), vol.Range(min=-15.0, max=5.0)),
     }
 )
 @websocket_api.async_response
@@ -84,7 +98,7 @@ async def ws_chart(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
     room = msg.get("room") if msg.get("room") in rooms else active
     outside_entity, weather = cfg.get(CONF_OUTSIDE) or None, cfg.get(CONF_WEATHER) or None
     now = dt_util.utcnow()
-    start = now - datetime.timedelta(days=msg["days"])
+    start = now - datetime.timedelta(days=max(msg["days"], LEARN_DAYS))  # always enough history to learn from
     wanted = [room] + ([outside_entity] if outside_entity else [weather] if weather else [])
     notes: list[str] = []
     try:
@@ -105,7 +119,11 @@ async def ws_chart(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
             notes.append(f"No forecast: {err}")
     else:
         notes.append("No weather entity is set, so there is no forecast: choose one in the options.")
-    chart = series.build(room_label(hass, room), climate, outside, forecast, now.timestamp(), notes)
+    if msg["outside_offset"]:
+        forecast = [(t, v + msg["outside_offset"]) for t, v in forecast]
+        notes.append(f"What-if: the forecast outside temperature is shifted by {msg['outside_offset']:+.0f}°.")
+    prediction = predict_room(hass, room, climate, outside, forecast, now.timestamp(), notes)
+    chart = series.build(room_label(hass, room), climate, outside, forecast, now.timestamp(), notes, prediction=prediction)
     connection.send_result(msg["id"], {"entries": listing, "entry_id": entry.entry_id, "room": room, "chart": chart})
 
 

@@ -304,7 +304,8 @@ async def test_the_panel_command_returns_the_room_outside_forecast_and_heating(h
     assert [v for _, v in chart["outside"]] == [7.5, 6.9]  # 'unavailable' is skipped, not drawn as a value
     assert [v for _, v in chart["forecast"]] == [6.0, 5.5]
     start, end = chart["heating"][0]
-    assert end - start == 30 * 60 and chart["notes"] == []  # heating from the 60-minutes-ago row to the next row
+    assert end - start == 30 * 60  # heating from the 60-minutes-ago row to the next row
+    assert chart["prediction"] is None and "Not enough free-cooling history" in " ".join(chart["notes"])  # 2 hours of history is not enough to learn
 
 
 async def test_the_panel_opens_on_the_active_room_not_the_first_in_the_list(hass, hass_ws_client):
@@ -363,3 +364,29 @@ async def test_the_only_weather_entity_is_suggested_and_two_are_not(hass):
     hass.states.async_set("weather.other", "sunny", {})
     again = await start_flow(hass)
     assert next(k.description["suggested_value"] for k in again["data_schema"].schema if k == "weather_entity") is None
+
+
+async def test_the_panel_learns_the_rooms_cooling_and_predicts_the_next_day(hass, hass_ws_client):
+    import math
+
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
+    await setup_entry(hass, ["climate.lounge"], weather_entity="weather.home", outside_sensor=OUTSIDE)
+    steps, t = 5 * 144, 19.0  # 5 days of 10-minute states of a room that cools with tau 20 h toward 0.25/h gains and the outside
+    lounge_states, outside_states = [], []
+    for k in range(steps):
+        h = k / 6.0
+        out = 8.0 + 3.0 * math.sin(2 * math.pi * h / 24)
+        ago = (steps - k) * 10
+        lounge_states.append(_state("climate.lounge", "heat", {**LOUNGE, "current_temperature": round(t, 2), "temperature": 12.5}, ago))
+        outside_states.append(_state(OUTSIDE, f"{out:.2f}", {}, ago))
+        t += (1 / 6) * (0.25 - t / 20.0 + 0.03 * out)
+    forecast = [{"datetime": (NOW + datetime.timedelta(hours=k)).isoformat(), "temperature": 8.0} for k in range(1, 30)]
+    reply = await _chart(hass, hass_ws_client, {"climate.lounge": lounge_states, OUTSIDE: outside_states}, forecast)
+    chart = reply["result"]["chart"]
+    p = chart["prediction"]
+    assert p is not None, chart["notes"]
+    assert abs(p["tau_h"] - 20.0) < 1.5
+    assert p["minimum"] == 12.5 and "an hour or more" in p["minimum_source"]  # the lounge has no LOW setting: its floor is the target it held
+    assert len(p["curve"]) == 49 and p["curve"][0][0] == int(NOW.timestamp())
+    assert abs(p["curve"][-1][1] - 9.8) < 0.5  # the room's equilibrium at a steady 8 C outside: (0.25 + 0.03*8) * 20 = 9.8
+    assert p["heating_now"] is False and chart["notes"] == []

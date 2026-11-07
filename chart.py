@@ -23,15 +23,8 @@ ATTRS = ["current_temperature", "temperature", "target_temp_low", "percentage_de
 OUTSIDE_FILE = "sensor.stats_outside_temperature.json"  # this house's outside sensor history; the preview takes it as a given
 
 
-def _load_series():
-    spec = importlib.util.spec_from_file_location("wiser_predictive_series", PKG / "series.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["wiser_predictive_series"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-series = _load_series()
+sys.path.insert(0, str(PKG))  # series.py imports thermal and model as plain modules here
+import series  # noqa: E402
 
 
 def load(path):
@@ -51,7 +44,7 @@ def forecast_rows(fc):
     return [(datetime.datetime.fromisoformat(f["datetime"]).timestamp(), f["temperature"]) for f in fc["service_response"][entity]["forecast"]]
 
 
-def build(room, data):
+def build(room, data, offset=0.0):
     d = pathlib.Path(data)
     rows = load(d / f"climate.wiser_{room}.json")
     if not rows:
@@ -59,7 +52,11 @@ def build(room, data):
     climate = climate_rows(rows)
     now = max(t for t, a in climate if a.get("current_temperature") is not None)
     outside = [(r[0] / 1000.0, r[1]) for r in load(d / OUTSIDE_FILE) if r[1] is not None]
-    chart = series.build(room.replace("_", " ").title(), climate, outside, forecast_rows(load(d / "forecast_hourly.json")), now)
+    forecast = [(t, v + offset) for t, v in forecast_rows(load(d / "forecast_hourly.json"))]
+    latest = max(climate, key=lambda r: r[0])[1]
+    low = latest.get("target_temp_low")
+    prediction, notes = series.predict(climate, outside, forecast, now, low, bool(latest.get("is_heating") or latest.get("is_boosted")))
+    chart = series.build(room.replace("_", " ").title(), climate, outside, forecast, now, notes, prediction=prediction)
     return {"entries": [{"entry_id": "preview", "title": "Preview", "rooms": [{"entity_id": f"climate.wiser_{room}", "name": chart["name"]}]}],
             "entry_id": "preview", "room": f"climate.wiser_{room}", "chart": chart}
 
@@ -69,8 +66,9 @@ def main():
     ap.add_argument("--room", default="lounge")
     ap.add_argument("--data", default=str(ROOT / "data"))
     ap.add_argument("--out", default=str(ROOT / "data" / "chart.html"))
+    ap.add_argument("--cold", type=float, default=0.0, help="what-if: degrees colder than the forecast")
     args = ap.parse_args()
-    payload = build(args.room, args.data)
+    payload = build(args.room, args.data, -args.cold)
     html = (ROOT / "chart_template.html").read_text()
     html = html.replace("/*PANEL*/", (PKG / "frontend" / "panel.js").read_text().replace("</script", "<\\/script"))
     html = html.replace("/*DATA*/null", json.dumps(payload, separators=(",", ":")))
