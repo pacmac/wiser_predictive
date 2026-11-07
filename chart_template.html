@@ -14,7 +14,7 @@ const start = () => {
   const panel = document.createElement('wiser-predictive-panel');
   document.body.appendChild(panel);
   const dark = window.matchMedia('(prefers-color-scheme: dark)');
-  const hass = () => ({ themes: { darkMode: dark.matches }, callWS: async () => DATA });
+  const hass = () => ({ themes: { darkMode: dark.matches }, config: { time_zone: window.HOUSE_TZ || 'UTC' }, callWS: async () => DATA });
   panel.hass = hass();
   dark.addEventListener('change', () => { panel.hass = hass(); });
 };

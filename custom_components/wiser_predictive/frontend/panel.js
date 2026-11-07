@@ -39,7 +39,16 @@ svg text.mono{ font-family:ui-monospace,"Roboto Mono",monospace; }
 const MERGE_GAP = 20 * 60;  /* seconds. Wiser's boost and heating spans are merged when less than 20 min apart: a boost lasts 14-15 min, so one heat-up is one band. */
 const LEFT = 46, RIGHT = 12, TITLE = 24, GAP = 14, AXIS = 30;
 
-const fmtT = (t, o) => new Date(t * 1000).toLocaleString([], o);
+/* Times are shown in TZ: the house's clock (Home Assistant's time zone) by default, because the heating is at the house and
+   its schedules run on that clock, or the viewer's own clock. undefined means the browser's. Set before every draw. */
+let TZ;
+const fmtT = (t, o) => new Date(t * 1000).toLocaleString([], TZ ? { ...o, timeZone: TZ } : o);
+function tzOffset(t) {  /* seconds the clock in TZ is ahead of UTC at time t */
+  if (!TZ) return -new Date(t * 1000).getTimezoneOffset() * 60;
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    .formatToParts(new Date(t * 1000)).map(x => [x.type, x.value]));
+  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) / 1000 - Math.floor(t);
+}
 const hhmm = t => fmtT(t, { hour: '2-digit', minute: '2-digit', hour12: false });
 const num = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? '–' : v.toFixed(d);
 
@@ -75,11 +84,12 @@ function heatSpans(D) {
 class WiserPredictivePanel extends HTMLElement {
   constructor() {
     super();
-    this._days = 3; this._cold = 0; this._entry = null; this._room = null; this._data = null; this._hass = null; this._narrow = false;
+    this._days = 3; this._cold = 0; this._tzMode = 'server'; this._entry = null; this._room = null; this._data = null; this._hass = null; this._narrow = false;
     const root = this.attachShadow({ mode: 'open' });
     root.innerHTML = `<style>${STYLE}</style><main>
       <div class="bar"><div class="left"><span id="menu"></span><h1 id="title">Predictive Heating</h1></div>
         <div class="ctl"><select id="room" aria-label="Room" hidden></select>
+          <select id="tz" aria-label="Which clock the times use" title="The house's clock is Home Assistant's time zone"><option value="server">House time</option><option value="browser">My time</option></select>
           <select id="cold" aria-label="What if the weather turns colder" title="Shifts the forecast down to see how the prediction reacts"><option value="0">Forecast as it is</option><option value="3">What if 3° colder</option><option value="5">What if 5° colder</option><option value="8">What if 8° colder</option></select>
           <div class="btns" role="group" aria-label="Time window"><button data-days="3" aria-pressed="true">3 days</button><button data-days="10" aria-pressed="false">10 days</button></div></div></div>
       <div class="story" id="story"></div>
@@ -92,6 +102,7 @@ class WiserPredictivePanel extends HTMLElement {
       root.querySelectorAll('button[data-days]').forEach(o => o.setAttribute('aria-pressed', o === b));
       this._load();
     }));
+    this.$('tz').addEventListener('change', e => { this._tzMode = e.target.value; if (this._data) { this._clock(); this._story(); this._render(); this._notes(); } });
     this.$('cold').addEventListener('change', e => { this._cold = +e.target.value; this._load(); });
     this.$('room').addEventListener('change', e => { const [entry, room] = e.target.value.split('|'); this._entry = entry; this._room = room; this._load(); });
     new ResizeObserver(() => { clearTimeout(this._rt); this._rt = setTimeout(() => this._data && this._render(), 80); }).observe(this);
@@ -113,7 +124,7 @@ class WiserPredictivePanel extends HTMLElement {
     if (!this._hass) return;
     try {
       const r = await this._hass.callWS({ type: 'wiser_predictive/chart', days: this._days, outside_offset: -this._cold, ...(this._entry ? { entry_id: this._entry } : {}), ...(this._room ? { room: this._room } : {}) });
-      this._entry = r.entry_id; this._room = r.room; this._data = r.chart; this._fillRooms(r);
+      this._entry = r.entry_id; this._room = r.room; this._data = r.chart; this._fillRooms(r); this._clock();
       if (!r.chart) { this.$('chart').innerHTML = '<div class="empty">No rooms are chosen. Add rooms in the Wiser Predictive options.</div>'; this.$('story').innerHTML = ''; return; }
       this._story(); this._render(); this._notes();
     } catch (e) {
@@ -127,6 +138,12 @@ class WiserPredictivePanel extends HTMLElement {
     sel.value = `${r.entry_id}|${r.room}`;
   }
   _css(n) { return getComputedStyle(this).getPropertyValue(n).trim(); }
+  _clock() {  /* which time zone every time on the page uses */
+    const house = this._hass && this._hass.config && this._hass.config.time_zone;
+    TZ = this._tzMode === 'server' && house ? house : undefined;
+    this.$('tz').hidden = !house;  /* without a house time zone there is only the browser's clock */
+    this._tzName = TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }
 
   _story() {
     const D = this._data, x0 = D.now - this._days * 86400, days = this._days;
@@ -169,7 +186,7 @@ class WiserPredictivePanel extends HTMLElement {
   _notes() {
     const D = this._data;
     this.$('note').textContent = (D.notes.length ? D.notes.join(' ') + ' ' : '') +
-      `Recorded history up to ${fmtT(D.now, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}. Heating is the room's boost and heating periods from Wiser. The dotted blue line is the predicted temperature if no heat is supplied, from the room's own cooling and the outside forecast. The dashed orange line is the temperature with the planned heating.`;
+      `Times are on ${this._tzMode === 'server' && TZ ? "the house's" : 'your'} clock (${this._tzName}). Recorded history up to ${fmtT(D.now, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}. Heating is the room's boost and heating periods from Wiser. The dotted blue line is the predicted temperature if no heat is supplied, from the room's own cooling and the outside forecast. The dashed orange line is the temperature with the planned heating.`;
   }
 
   _render() {
@@ -215,11 +232,11 @@ class WiserPredictivePanel extends HTMLElement {
       y = bot + GAP;
     }
     const bottom = y - GAP, stepH = (days <= 3 ? 6 : 24) * (W < 600 ? 2 : 1);
-    const f = new Date(x0 * 1000); f.setMinutes(0, 0, 0); f.setHours(Math.ceil((f.getHours() + 1) / stepH) * stepH);
-    for (let d = f; d.getTime() / 1000 <= x1; d = new Date(d.getTime() + stepH * 3600e3)) {
-      const t = d.getTime() / 1000, mid = d.getHours() === 0;
+    const stepS = stepH * 3600, off0 = tzOffset(x0);  /* ticks every stepH hours on the TZ clock, so midnight lines fall on its midnight */
+    for (let t = Math.ceil((x0 + off0) / stepS) * stepS - off0; t <= x1; t += stepS) {
+      const hour = (((Math.floor((t + tzOffset(t)) / 3600)) % 24) + 24) % 24, mid = hour === 0;
       body += `<line x1="${X(t)}" x2="${X(t)}" y1="${first}" y2="${bottom}" stroke="${css(mid ? '--axis' : '--grid')}" stroke-width="${mid ? 1 : .5}"/>`;
-      body += `<text x="${X(t)}" y="${bottom + 16}" text-anchor="middle">${mid ? fmtT(t, { weekday: 'short', day: 'numeric' }) : String(d.getHours()).padStart(2, '0') + ':00'}</text>`;
+      body += `<text x="${X(t)}" y="${bottom + 16}" text-anchor="middle">${mid ? fmtT(t, { weekday: 'short', day: 'numeric' }) : String(hour).padStart(2, '0') + ':00'}</text>`;
     }
     let lastLabel = -1e9;  /* label a heat-up only if there is room after the previous label: the text is about 95 px wide */
     if (days <= 3) for (const [a] of heats) if (a >= x0 && X(a) - lastLabel > 100) { body += `<text class="heat" x="${X(a) + 3}" y="${first + 12}">heating ${hhmm(a)}</text>`; lastLabel = X(a); }
