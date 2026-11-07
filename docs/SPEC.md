@@ -17,7 +17,7 @@ custom_components/wiser_predictive/
   model.py          pure Python, NO homeassistant imports: fit, time_to_minimum, lead, decision
   const.py
   manifest.json
-  __init__.py  config_flow.py  sensor.py  binary_sensor.py  strings.json
+  __init__.py  config_flow.py  sensor.py  binary_sensor.py  translations/en.json
 tests/              pytest on model.py; fixtures cut from the archived history
 deploy.py           copy the integration to the box: dry run by default, --go copies, --restart separate
 docs/SPEC.md

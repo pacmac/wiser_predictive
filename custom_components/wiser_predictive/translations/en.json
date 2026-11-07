@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Wiser Predictive",
+        "description": "Choose the rooms to watch and the sensor that reads the outside temperature.",
+        "data": {
+          "rooms": "Rooms (Wiser climate entities)",
+          "outside_sensor": "Outside temperature sensor"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Wiser Predictive is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Wiser Predictive",
+        "data": {
+          "rooms": "Rooms (Wiser climate entities)",
+          "outside_sensor": "Outside temperature sensor"
+        }
+      }
+    }
+  }
+}
