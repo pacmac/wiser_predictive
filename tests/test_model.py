@@ -1,10 +1,12 @@
 """model.py: the room minimum and the margin above it. Values are the live ones read from the box 2026-11-07."""
 import importlib.util
 import pathlib
+import sys
 
 _p = pathlib.Path(__file__).resolve().parent.parent / "custom_components" / "wiser_predictive" / "model.py"
 _s = importlib.util.spec_from_file_location("model", _p)
 model = importlib.util.module_from_spec(_s)
+sys.modules["model"] = model
 _s.loader.exec_module(model)
 
 LOUNGE = {"current_temperature": 12.6, "temperature": 12.5, "is_passive": False}
