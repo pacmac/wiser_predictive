@@ -19,12 +19,14 @@ h1{ font-size:22px; font-weight:500; margin:0; }
 button,select{ font:inherit; color:var(--ink); background:var(--btn); border:0; border-radius:6px; padding:6px 14px; cursor:pointer; }
 button{ font-weight:500; } button[aria-pressed="true"]{ background:var(--btn-on); color:var(--btn-on-ink); }
 button:focus-visible,select:focus-visible{ outline:2px solid var(--in); outline-offset:2px; }
-.story{ display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
-.story > div{ background:var(--panel); border-radius:8px; padding:12px 14px; min-width:0; }
-.story .k{ font-size:13px; font-weight:600; display:flex; align-items:center; gap:8px; }
-.story .k i{ width:18px; border-top:3px solid; }
-.story .v{ font-size:19px; font-weight:500; margin-top:2px; font-variant-numeric:tabular-nums; }
-.story .d{ color:var(--muted); font-size:13px; }
+.story{ display:flex; flex-direction:column; gap:14px; }
+.group h2{ font-size:13px; font-weight:600; letter-spacing:.02em; text-transform:uppercase; color:var(--muted); margin:0 0 6px; }
+.group .gn{ text-transform:none; letter-spacing:0; font-weight:400; margin-left:8px; color:var(--heat-ink); }
+.tiles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; }
+.tile{ background:var(--panel); border-radius:8px; padding:10px 12px; min-width:0; }
+.tile .l{ font-size:12px; color:var(--muted); }
+.tile .n{ font-size:22px; font-weight:500; line-height:1.25; font-variant-numeric:tabular-nums; }
+.tile .s{ font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
 #readout{ background:var(--panel); border-radius:6px; padding:8px 12px; min-height:2.6em; font-family:ui-monospace,"Roboto Mono",monospace; font-size:13px; font-variant-numeric:tabular-nums; }
 #chart{ background:var(--panel); border-radius:8px; padding:8px 0; }
 svg{ display:block; width:100%; touch-action:pan-y; }
@@ -34,6 +36,10 @@ svg text.heat{ fill:var(--heat-ink); font-weight:600; font-size:11px; }
 svg text.mono{ font-family:ui-monospace,"Roboto Mono",monospace; }
 .note{ color:var(--muted); font-size:13px; max-width:80ch; margin:0; }
 .empty{ padding:28px 16px; color:var(--muted); text-align:center; }
+.explain{ background:var(--panel); border-radius:8px; padding:10px 14px; font-size:13px; }
+.explain summary{ cursor:pointer; font-weight:600; }
+.explain dt{ font-weight:600; margin-top:8px; }
+.explain dd{ margin:2px 0 0; color:var(--muted); max-width:80ch; }
 .rooms{ background:var(--panel); border-radius:8px; padding:12px 14px; }
 .rooms h2{ font-size:15px; font-weight:600; margin:0 0 8px; }
 .scroll{ overflow-x:auto; }
@@ -84,15 +90,6 @@ function at(data, t, step) {
 }
 const within = (data, x0, x1) => data.filter(p => p[0] >= x0 && p[0] <= x1).map(p => p[1]);
 
-/* How the figures were learned: every completed day is kept, so the number of days grows; once 14 days are kept the forgetting
-   rate (how fast old days fade) is chosen by predicting each recent day from the days before it. */
-function learnedText(info, ch) {
-  const days = info ? info.days : ch.days, windows = info ? info.windows : ch.windows;
-  const fade = !info ? '' : info.half_life_days ? ` Older days fade with a half-life of ${info.half_life_days} days, chosen by predicting each recent day from the days before it.`
-    : info.chosen_by_days ? ' No fading predicted best, so every day counts equally.' : ' No fading yet: choosing one needs 14 days.';
-  return `Learned from ${windows} windows over ${days} days, kept as they complete.${fade}`;
-}
-
 function heatSpans(D) {
   const all = [...D.heating, ...D.boost].filter(([a, b]) => b > a).sort((p, q) => p[0] - q[0]), out = [];
   for (const [a, b] of all) { const last = out[out.length - 1]; if (last && a - last[1] <= MERGE_GAP) last[1] = Math.max(last[1], b); else out.push([a, b]); }
@@ -114,6 +111,13 @@ class WiserPredictivePanel extends HTMLElement {
       <div id="readout">Move over the chart to read the values at that time.</div>
       <div id="chart"></div>
       <div id="rooms"></div>
+      <details class="explain"><summary>What do these figures mean?</summary>
+        <dl><dt>Thermal time constant</dt><dd>The room's thermal capacitance divided by its heat loss coefficient: the time to cover 63% of a change in the outside temperature. A long one means the room changes slowly. The ± is how far the figure moves if any one day is left out, so a wide ± means it is not yet well known; it narrows as days are added.</dd>
+        <dt>Outdoor coupling</dt><dd>How many degrees the settled room temperature moves for each degree of outside change. Below 1 means heat is also exchanged with other rooms or gained inside.</dd>
+        <dt>Daily swing</dt><dd>How late, and how much smaller, the day-and-night swing of the outside temperature is inside the room (the time lag and decrement of building physics).</dd>
+        <dt>Settles at</dt><dd>The temperature the room heads for with no heating, for a steady outside temperature.</dd>
+        <dt>Heat response</dt><dd>How the room heats up with heat on: it heads for this maximum with this time constant.</dd>
+        <dt>Learned from</dt><dd>Every completed day is kept, so the figures use all of them. Once 14 days are kept, how fast older days fade is chosen by predicting each recent day from the days before it.</dd></dl></details>
       <p class="note" id="note"></p></main>`;
     this.$ = id => root.getElementById(id);
     root.querySelectorAll('button[data-days]').forEach(b => b.addEventListener('click', () => {
@@ -185,46 +189,57 @@ class WiserPredictivePanel extends HTMLElement {
   _story() {
     const D = this._data, x0 = D.now - this._days * 86400, days = this._days;
     this.$('title').textContent = D.name;
-    const sum = (data, label, color) => {
-      const v = within(data, x0, D.now); if (!v.length) return '';
-      const start = at(data, x0, true) ?? v[0], now = v[v.length - 1], lo = Math.min(...v), hi = Math.max(...v), change = now - start;
-      return `<div><div class="k"><i style="border-color:var(${color})"></i>${label}</div><div class="v">${num(now)}° now</div>
-        <div class="d">${days} days ago ${num(start)}°, lowest ${num(lo)}°, highest ${num(hi)}°. ${Math.abs(change) < .15 ? 'About the same.' : change < 0 ? `Down ${num(-change)}°.` : `Up ${num(change)}°.`}</div></div>`;
+    /* The header is stat tiles: a label, one number, and (where there is one) its uncertainty or context beneath. Numbers are never
+       left inside a sentence. What the terms mean is in the collapsible section below, and on hover. */
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const tile = (label, value, sub, help) => `<div class="tile"${help ? ` title="${esc(help)}"` : ''}><div class="l">${esc(label)}</div><div class="n">${value}</div>${sub ? `<div class="s">${sub}</div>` : '<div class="s">&nbsp;</div>'}</div>`;
+    const group = (title, tiles, note) => tiles.length ? `<section class="group"><h2>${esc(title)}${note ? ` <span class="gn">${note}</span>` : ''}</h2><div class="tiles">${tiles.join('')}</div></section>` : '';
+    const when = t => fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+    const se = (v, d, unit = '') => (v === null || v === undefined) ? '' : `±${v.toFixed(d)}${unit}`;  /* an uncertainty, shown under its figure */
+
+    /* now */
+    const stat = data => {
+      const v = within(data, x0, D.now); if (!v.length) return null;
+      const start = at(data, x0, true) ?? v[0], now = v[v.length - 1];
+      return { now, start, lo: Math.min(...v), hi: Math.max(...v), change: now - start };
     };
+    const inn = stat(D.reading), out = stat(D.outside);
     const heats = heatSpans(D).filter(([, b]) => b > x0), mins = Math.round(heats.reduce((s, [a, b]) => s + (Math.min(b, D.now) - Math.max(a, x0)) / 60, 0));
-    const when = heats.slice(-3).map(([a]) => fmtT(a, { weekday: 'short', hour: '2-digit', minute: '2-digit' })).join(', ');
-    const pr = D.prediction;
-    let predicted = '';
+    const change = c => Math.abs(c) < .15 ? 'about the same' : `${c < 0 ? 'down' : 'up'} ${num(Math.abs(c))}° in ${days} days`;
+    const nowTiles = [
+      ...(inn ? [tile('Inside now', `${num(inn.now)}°`, `${change(inn.change)} · low ${num(inn.lo)}°`)] : []),
+      ...(out ? [tile('Outside now', `${num(out.now)}°`, `${change(out.change)} · low ${num(out.lo)}°`)] : []),
+      tile(`Heating, last ${days} days`, `${heats.length}×`, `${mins} min in all${heats.length ? ` · last ${when(heats[heats.length - 1][0])}` : ''}`),
+    ];
+
+    /* prediction and plan */
+    const pr = D.prediction, predTiles = [];
     if (pr) {
-      const when = t => fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }), lowF = pr.outside_low;
-      const out = lowF ? ` Outside forecast low ${num(lowF[1])}° at ${when(lowF[0])}.` : '';
-      const v = pr.reaches_at ? `Reaches ${num(pr.minimum)}° at ${when(pr.reaches_at)}` : `Stays above ${num(pr.minimum)}° until ${when(pr.ends_at)}`;
-      const d = pr.reaches_at
-        ? `If nothing heats it. Heat is needed by ${when(pr.call_by)}: once heat is called the room stops falling within ${Math.round(pr.lead_s / 60)} min.${out}`
-        : `As far as the forecast goes (${Math.round(pr.horizon_h)} h), if nothing heats it. Lowest ${num(pr.lowest[1])}°${pr.falling_at_end ? ', and still falling when the forecast ends' : ''}.${out}`;
-      predicted = `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Prediction</div><div class="v">${v}</div>
-        <div class="d">${this._cold ? `<b>What if: outside ${this._cold}° colder than forecast.</b> ` : ''}${d}${pr.heating_now ? ' Heating is on now; this is what happens if it stops now.' : ''}</div>
-        <div class="d">Minimum is ${pr.minimum_source}.</div></div>`;
+      predTiles.push(tile('Minimum', `${num(pr.minimum)}°`, esc(pr.minimum_source), 'The temperature the room must stay above.'));
+      predTiles.push(pr.reaches_at
+        ? tile('Reaches the minimum', when(pr.reaches_at), 'if nothing heats it', 'When the predicted temperature, with no heating, falls to the minimum.')
+        : tile('Stays above the minimum', `to ${when(pr.ends_at)}`, `lowest ${num(pr.lowest[1])}°${pr.falling_at_end ? ' · still falling' : ''}`, `As far as the forecast goes (${Math.round(pr.horizon_h)} h).`));
+      if (pr.reaches_at) predTiles.push(tile('Heat needed by', when(pr.call_by), `${Math.round(pr.lead_s / 60)} min before: that is how long heat takes to stop the fall`, 'The latest safe moment to call for heat.'));
+      if (pr.outside_low) predTiles.push(tile('Forecast outside low', `${num(pr.outside_low[1])}°`, `at ${when(pr.outside_low[0])}`));
+      if (pr.plan && pr.plan.runs.length) {
+        const r = pr.plan.runs, a = r[0];
+        predTiles.push(tile('Planned heat', `${a.minutes} min`, `from ${when(a.call_by)} · lifts to ${num(a.lifts_to)}°${r.length > 1 ? ` · then ${r.slice(1).map(x => `${x.minutes} min from ${when(x.call_by)}`).join(', ')}` : ''}`,
+          'Minutes at full demand, started as late as is safe and just long enough to hold the minimum to the end of the forecast.'));
+        predTiles.push(tile('Heat response', `${num(pr.heating.tmax)}° max`, `${Math.round(pr.heating.tau_min)} min time constant · from ${pr.heating.runs} runs`, 'How the room heats up when heat is on: it heads for this temperature with this time constant.'));
+      } else if (pr.plan) predTiles.push(tile('Planned heat', 'none', 'stays above the minimum'));
     }
-    let plan = '';
-    if (pr && pr.plan && pr.plan.runs.length) {
-      const when = t => fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }), r = pr.plan.runs, a = r[0];
-      const more = r.slice(1).map(x => `then ${x.minutes} min from ${when(x.call_by)}`).join(', ');
-      plan = `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Plan</div><div class="v">Heat ${a.minutes} min from ${when(a.call_by)}</div>
-        <div class="d">Full-demand minutes, as late as is safe. It lifts the room to ${num(a.lifts_to)}° and ${a.holds_until ? `holds the minimum until ${when(a.holds_until)}` : 'holds the minimum to the end of the forecast'}.${more ? ' ' + more + '.' : ''}</div>
-        <div class="d">Heat response learned from ${pr.heating.runs} runs (error ${num(pr.heating.rms, 2)}°).</div></div>`;
-    } else if (pr && pr.plan) {
-      plan = `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Plan</div><div class="v">No heat needed</div><div class="d">The room stays above its minimum as far as the forecast goes.</div></div>`;
+    const predNote = `${this._cold ? `<b>what if ${this._cold}° colder than forecast</b>` : ''}${pr && pr.heating_now ? `${this._cold ? ' · ' : ''}heating is on now: this is what happens if it stops` : ''}`;
+
+    /* the room's thermal character */
+    const ch = D.character, info = D.learning, charTiles = [];
+    if (ch) {
+      charTiles.push(tile('Thermal time constant', `${ch.tau_h.toFixed(1)} h`, se(ch.tau_se_h, 1, ' h'), 'Thermal capacitance divided by heat loss coefficient: the time to cover 63% of a change in the outside temperature.'));
+      charTiles.push(tile('Outdoor coupling', ch.coupling.toFixed(2), se(ch.coupling_se, 2), 'Degrees the settled room temperature moves for each degree of outside change. Below 1: heat is also exchanged with other rooms or gained inside.'));
+      charTiles.push(tile('Daily swing arrives', `${ch.delay_h.toFixed(1)} h late`, `shrunk to ${Math.round(ch.damping * 100)}%`, 'How late, and how much smaller, the day-and-night outside temperature swing is inside this room (time lag and decrement).'));
+      charTiles.push(tile('Settles at 8° outside', `${ch.settles[8].toFixed(1)}°`, `5°: ${ch.settles[5].toFixed(1)}° · 11°: ${ch.settles[11].toFixed(1)}°`, 'The temperature the room heads for with no heating, for a steady outside temperature.'));
+      if (info) charTiles.push(tile('Learned from', `${info.days} days`, `${info.windows} windows · ${info.half_life_days ? `older days fade, half-life ${info.half_life_days} d` : info.chosen_by_days ? 'no fading' : 'no fading yet (needs 14 days)'}`, 'Every completed day is kept. ± is how far a figure moves if any one day is left out; it narrows as days are added.'));
     }
-    const ch = D.character;
-    const pm = (v, s, d) => `${v.toFixed(d)}${s === null || s === undefined ? '' : ` ±${s.toFixed(d)}`}`;
-    const character = ch ? `<div><div class="k"><i style="border-color:var(--muted)"></i>${D.name.replace(/</g, '&lt;')}: thermal character</div>
-        <div class="v">τ ${pm(ch.tau_h, ch.tau_se_h, 1)} h</div>
-        <div class="d">Thermal time constant: time to cover 63% of a change in the outside temperature. Outdoor coupling ${pm(ch.coupling, ch.coupling_se, 2)}. A daily outside swing arrives ${ch.delay_h.toFixed(1)} h late and shrunk to ${Math.round(ch.damping * 100)}%. Settles at ${ch.settles[8].toFixed(1)}° when it is 8° outside.</div>
-        <div class="d">${learnedText(D.learning, ch)} ± is how far it moves if any one day is left out; it narrows as days are added.</div></div>` : '';
-    this.$('story').innerHTML = predicted + plan + character + sum(D.reading, 'Inside', '--in') + sum(D.outside, 'Outside', '--out') +
-      `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Heating on</div><div class="v">${heats.length} ${heats.length === 1 ? 'time' : 'times'}, ${mins} min in all</div>
-        <div class="d">${heats.length ? `Latest: ${when}.` : 'It did not come on.'}</div></div>`;
+    this.$('story').innerHTML = group('Now', nowTiles) + group('Prediction and plan', predTiles, predNote) + group(`${D.name}: thermal character`, charTiles);
   }
   _notes() {
     const D = this._data;
