@@ -205,39 +205,40 @@ class WiserPredictivePanel extends HTMLElement {
     };
     const inn = stat(D.reading), out = stat(D.outside);
     const heats = heatSpans(D).filter(([, b]) => b > x0), mins = Math.round(heats.reduce((s, [a, b]) => s + (Math.min(b, D.now) - Math.max(a, x0)) / 60, 0));
-    const change = c => Math.abs(c) < .15 ? 'about the same' : `${c < 0 ? 'down' : 'up'} ${num(Math.abs(c))}° in ${days} days`;
+    const change = c => Math.abs(c) < .15 ? 'steady' : `${c < 0 ? '▼' : '▲'} ${num(Math.abs(c))}° in ${days} d`;
     const nowTiles = [
-      ...(inn ? [tile('Inside now', `${num(inn.now)}°`, `${change(inn.change)} · low ${num(inn.lo)}°`)] : []),
-      ...(out ? [tile('Outside now', `${num(out.now)}°`, `${change(out.change)} · low ${num(out.lo)}°`)] : []),
-      tile(`Heating, last ${days} days`, `${heats.length}×`, `${mins} min in all${heats.length ? ` · last ${when(heats[heats.length - 1][0])}` : ''}`),
+      ...(inn ? [tile('Inside now', `${num(inn.now)}°`, change(inn.change), `Lowest in ${days} days: ${num(inn.lo)}°`)] : []),
+      ...(out ? [tile('Outside now', `${num(out.now)}°`, change(out.change), `Lowest in ${days} days: ${num(out.lo)}°`)] : []),
+      tile(`Heating, ${days} d`, `${heats.length}×`, `${mins} min`, heats.length ? `Last started ${when(heats[heats.length - 1][0])}` : 'It did not come on.'),
     ];
 
     /* prediction and plan */
     const pr = D.prediction, predTiles = [];
     if (pr) {
-      predTiles.push(tile('Minimum', `${num(pr.minimum)}°`, esc(pr.minimum_source), 'The temperature the room must stay above.'));
+      const lowSetting = pr.minimum_source.startsWith('its low');
+      predTiles.push(tile('Minimum', `${num(pr.minimum)}°`, lowSetting ? 'low setting' : 'lowest target held', `The temperature the room must stay above: ${pr.minimum_source}.`));
       predTiles.push(pr.reaches_at
-        ? tile('Reaches the minimum', when(pr.reaches_at), 'if nothing heats it', 'When the predicted temperature, with no heating, falls to the minimum.')
-        : tile('Stays above the minimum', `to ${when(pr.ends_at)}`, `lowest ${num(pr.lowest[1])}°${pr.falling_at_end ? ' · still falling' : ''}`, `As far as the forecast goes (${Math.round(pr.horizon_h)} h).`));
-      if (pr.reaches_at) predTiles.push(tile('Heat needed by', when(pr.call_by), `${Math.round(pr.lead_s / 60)} min before: that is how long heat takes to stop the fall`, 'The latest safe moment to call for heat.'));
-      if (pr.outside_low) predTiles.push(tile('Forecast outside low', `${num(pr.outside_low[1])}°`, `at ${when(pr.outside_low[0])}`));
+        ? tile('Reaches minimum', when(pr.reaches_at), 'with no heat', 'When the predicted temperature, with no heating, falls to the minimum.')
+        : tile('Stays above to', when(pr.ends_at), `low ${num(pr.lowest[1])}°${pr.falling_at_end ? ' ▼' : ''}`, `As far as the forecast goes (${Math.round(pr.horizon_h)} h), with no heating.`));
+      if (pr.reaches_at) predTiles.push(tile('Heat needed by', when(pr.call_by), `${Math.round(pr.lead_s / 60)} min lead`, `The latest safe moment to call for heat: once heat is called the room stops falling within ${Math.round(pr.lead_s / 60)} minutes.`));
+      if (pr.outside_low) predTiles.push(tile('Forecast low', `${num(pr.outside_low[1])}°`, when(pr.outside_low[0]), 'The coldest outside temperature in the forecast.'));
       if (pr.plan && pr.plan.runs.length) {
         const r = pr.plan.runs, a = r[0];
-        predTiles.push(tile('Planned heat', `${a.minutes} min`, `from ${when(a.call_by)} · lifts to ${num(a.lifts_to)}°${r.length > 1 ? ` · then ${r.slice(1).map(x => `${x.minutes} min from ${when(x.call_by)}`).join(', ')}` : ''}`,
-          'Minutes at full demand, started as late as is safe and just long enough to hold the minimum to the end of the forecast.'));
-        predTiles.push(tile('Heat response', `${num(pr.heating.tmax)}° max`, `${Math.round(pr.heating.tau_min)} min time constant · from ${pr.heating.runs} runs`, 'How the room heats up when heat is on: it heads for this temperature with this time constant.'));
-      } else if (pr.plan) predTiles.push(tile('Planned heat', 'none', 'stays above the minimum'));
+        predTiles.push(tile('Planned heat', `${a.minutes} min`, `${when(a.call_by)}${r.length > 1 ? ` +${r.length - 1} more` : ''}`,
+          `Minutes at full demand, started as late as is safe and just long enough to hold the minimum to the end of the forecast. Lifts the room to ${num(a.lifts_to)}°.${r.slice(1).map(x => ` Then ${x.minutes} min from ${when(x.call_by)}.`).join('')}`));
+        predTiles.push(tile('Heat response', `${num(pr.heating.tmax)}°`, `${Math.round(pr.heating.tau_min)} min · ${pr.heating.runs} runs`, 'How the room heats up with heat on: it heads for this maximum temperature with this time constant. Learned from the heat runs in the history.'));
+      } else if (pr.plan) predTiles.push(tile('Planned heat', 'none', 'stays above', 'The room stays above its minimum as far as the forecast goes.'));
     }
-    const predNote = `${this._cold ? `<b>what if ${this._cold}° colder than forecast</b>` : ''}${pr && pr.heating_now ? `${this._cold ? ' · ' : ''}heating is on now: this is what happens if it stops` : ''}`;
+    const predNote = `${this._cold ? `<b>what if ${this._cold}° colder</b>` : ''}${pr && pr.heating_now ? `${this._cold ? ' · ' : ''}heating on now` : ''}`;
 
     /* the room's thermal character */
     const ch = D.character, info = D.learning, charTiles = [];
     if (ch) {
       charTiles.push(tile('Thermal time constant', `${ch.tau_h.toFixed(1)} h`, se(ch.tau_se_h, 1, ' h'), 'Thermal capacitance divided by heat loss coefficient: the time to cover 63% of a change in the outside temperature.'));
       charTiles.push(tile('Outdoor coupling', ch.coupling.toFixed(2), se(ch.coupling_se, 2), 'Degrees the settled room temperature moves for each degree of outside change. Below 1: heat is also exchanged with other rooms or gained inside.'));
-      charTiles.push(tile('Daily swing arrives', `${ch.delay_h.toFixed(1)} h late`, `shrunk to ${Math.round(ch.damping * 100)}%`, 'How late, and how much smaller, the day-and-night outside temperature swing is inside this room (time lag and decrement).'));
-      charTiles.push(tile('Settles at 8° outside', `${ch.settles[8].toFixed(1)}°`, `5°: ${ch.settles[5].toFixed(1)}° · 11°: ${ch.settles[11].toFixed(1)}°`, 'The temperature the room heads for with no heating, for a steady outside temperature.'));
-      if (info) charTiles.push(tile('Learned from', `${info.days} days`, `${info.windows} windows · ${info.half_life_days ? `older days fade, half-life ${info.half_life_days} d` : info.chosen_by_days ? 'no fading' : 'no fading yet (needs 14 days)'}`, 'Every completed day is kept. ± is how far a figure moves if any one day is left out; it narrows as days are added.'));
+      charTiles.push(tile('Daily swing delay', `${ch.delay_h.toFixed(1)} h`, `size ${Math.round(ch.damping * 100)}%`, 'How late, and how much smaller, the day-and-night outside temperature swing is inside this room (time lag and decrement).'));
+      charTiles.push(tile('Settles at 8° out', `${ch.settles[8].toFixed(1)}°`, `5°: ${ch.settles[5].toFixed(1)}  11°: ${ch.settles[11].toFixed(1)}`, 'The temperature the room heads for with no heating, for a steady outside temperature of 8°, 5° and 11°.'));
+      if (info) charTiles.push(tile('Learned from', `${info.days} days`, `${info.windows} windows`, `Every completed day is kept. ${info.half_life_days ? `Older days fade with a half-life of ${info.half_life_days} days.` : info.chosen_by_days ? 'No fading predicted best.' : 'No fading yet: choosing a rate needs 14 days.'} The ± on the figures is how far they move if any one day is left out; it narrows as days are added.`));
     }
     this.$('story').innerHTML = group('Now', nowTiles) + group('Prediction and plan', predTiles, predNote) + group(`${D.name}: thermal character`, charTiles);
   }
