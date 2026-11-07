@@ -33,10 +33,10 @@ One chart per room (the active room first), x-axis from 3 days back to 24 h ahea
 3. **Rate of change.** dT/dt in °C/h for the room and for the outside, on their own axis. The rate matters as much as the temperature.
 4. **Demand.** Wiser's actual heating demand (%) for the room and the predictor's planned demand (%) on one axis, with shaded heat calls.
 5. **Decision trace.** `time_to_minimum` and `lead` over time, so the moment the logic fires is the moment the first falls below the second. Each action is marked on the chart with its reason in words ("forecast outside falling 1.4 °C/h, lounge reaches its minimum in 2 h 10 min, heat call needs 45 min").
-Where it is drawn:
-- **First (before any HA work): the replay.** `chart.py` (with `chart_template.html`) renders the chart as a static page from the history `replay.py --fetch` saves into `data/`, then the model is run on it, so Peter can look at what it would have done on the last 8 days, including the cold-front nights, before anything is installed.
-- **Then in Home Assistant:** the integration publishes the series (history, prediction, forecast, planned demand) as sensor attributes and ships a dashboard definition. `apexcharts-card` (past + forecast + "now" line, forecast from attributes via `data_generator`) is NOT installed on the box; `mini-graph-card` is. The decision between the two, or a panel bundled in the integration so it needs no extra card, is open (below).
-Acceptance: Peter looks at the chart and can say whether the logic fired when it should.
+THE CHART AND ITS SUMMARY ARE PART OF THE INTEGRATION (Peter, 2026-11-07: "these stats / charts should be part of the integration"). It is a sidebar panel registered by the integration itself ("Predictive Heating"), so it needs no HACS card, works in any house, and shows live data. It reads the recorder history, the weather forecast and the model's own output through Home Assistant, using the viewer's own login. Nothing about it is specific to one house: the rooms and sensors come from the config entry.
+What it shows is deliberately little (Peter: the first four-panel version was "information overload"): a summary in words at the top (inside now and over the window, outside now and over the window, how often and when the heating came on, and from stage 1 what the predictor says and why), then two panels on one time axis, inside and outside, with the heating periods shaded and labelled, and, from stage 1, the predicted curve and the moment heat is called. Anything more (rates, valve sensors, demand) appears only when the model uses it, and is explained in words when it does.
+`chart.py` and `chart_template.html` are the development preview of the same page, built from `replay.py --fetch` history, so the design can be looked at before it is installed. The panel is built from that template, not a second design.
+Acceptance: Peter looks at the chart on the Home Assistant sidebar and can say whether the logic fired when it should.
 
 ## AI LAYER (optional, later)
 The real-time decision is the deterministic model: it must not wait on an API call or fail when the internet does. A Claude script is used for periodic review: it reads the model's fitted parameters, the log of what was predicted against what happened and the forecast, then explains misses, flags a bad fit, and proposes parameter changes that Peter approves. It is never in the control loop.
@@ -46,16 +46,16 @@ The framework: hub selection (auto if one, user picks if several), room discover
 **Scrapped or replaced:** the margin threshold as the decision; "Heat needed within 0.1 °C" and the announcement keyed to it; the `time_to_minimum` placeholders (removed already).
 
 ## STAGES
-0. Replay chart (read-only, nothing on the box). Gate: Peter looks at it.
-1. Model fitted and measured in the replay against the 8 days (and more history fetched from the recorder with `--fetch`). Gate: lead and accuracy figures shown on the chart.
-2. Integration: publishes predictions, rates and planned demand as entities, and the dashboard. Announce only; no thermostat changes. Gate: Peter looks at it on the live dashboard for several days.
+0. Replay chart preview (read-only, nothing on the box). Done as a preview; Peter found the first version unreadable and the second is cut to inside, outside and heating.
+1. The panel in the integration, with the stage 0 content live from the recorder and the forecast: summary in words, inside and outside panels, heating shaded. No model yet. Needs a deploy and a restart (Peter's go-ahead). Gate: Peter looks at it in the Home Assistant sidebar.
+2. Model fitted and measured in the replay against the history (more fetched with `--fetch`), then its predicted curve, the call moment and the reason in words added to the panel, and published as entities (planned demand). Announce only; no thermostat changes. Gate: lead and accuracy shown on the chart, and Peter looks at it live for several days.
 3. Act on the active room (a boost or setpoint through its lever), replacing Boost on Demand. Needs its own go-ahead and a plan to retire Boost on Demand.
 
 ## OUT OF SCOPE
 Any box change without a dry run, backup, ledger row and Peter's go-ahead. The Wiser integration itself. The `ha-inventory` repo.
 
 ## OPEN FOR PETER
-- Chart: ship a panel bundled in the integration (no extra card, works in any house, more to build) or use `apexcharts-card` through HACS (quick, one more dependency)? Recommendation: apexcharts-card for stages 0–2 while the model is being found, then decide.
+- (Decided: the chart is a panel bundled in the integration; see VISUALISATION.)
 - The active room's minimum: a number you set. What is the lounge's?
 - A separate air sensor in the lounge (off the radiator) would give the model an honest signal; worth adding?
 - Outside source: `weather.forecast_home` (forecast and current) rather than a local sensor; the box entry's outside sensor currently points at a sensor named "Plant Dryer Temperature". Confirm.
