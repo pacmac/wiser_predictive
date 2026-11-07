@@ -2,24 +2,37 @@
   "config": {
     "step": {
       "user": {
-        "title": "Wiser Predictive",
-        "description": "Choose the rooms to watch and the sensor that reads the outside temperature.",
+        "title": "Which Wiser hub?",
+        "description": "More than one Wiser hub is set up. Rooms are discovered from the hub you choose.",
         "data": {
-          "rooms": "Rooms (Wiser climate entities)",
+          "hub": "Wiser hub"
+        }
+      },
+      "rooms": {
+        "title": "Wiser Predictive: {hub}",
+        "description": "Rooms found on {hub}. Untick any you do not want, and choose the sensor that reads the outside temperature.",
+        "data": {
+          "rooms": "Rooms",
           "outside_sensor": "Outside temperature sensor"
         }
       }
     },
+    "error": {
+      "no_rooms": "No rooms were found on this hub. Go back and choose another hub.",
+      "no_rooms_selected": "Select at least one room."
+    },
     "abort": {
-      "already_configured": "Wiser Predictive is already set up."
+      "already_configured": "Wiser Predictive is already set up for this hub.",
+      "no_wiser": "No Wiser hub is set up. Add the Wiser integration first."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Wiser Predictive",
+        "title": "Wiser Predictive: {hub}",
+        "description": "The hub cannot be changed here. To use another hub, remove this entry and add it again.",
         "data": {
-          "rooms": "Rooms (Wiser climate entities)",
+          "rooms": "Rooms",
           "outside_sensor": "Outside temperature sensor"
         }
       }

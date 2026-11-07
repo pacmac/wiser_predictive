@@ -10,7 +10,7 @@ from .sensor import device_info
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
-    async_add_entities([HeatNeeded(entry)])
+    async_add_entities([HeatNeeded(hass, entry)])
 
 
 class HeatNeeded(BinarySensorEntity):
@@ -20,6 +20,6 @@ class HeatNeeded(BinarySensorEntity):
     _attr_is_on = None
     _attr_extra_state_attributes = {"model": "not built yet"}
 
-    def __init__(self, entry: ConfigEntry) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._attr_unique_id = f"{entry.entry_id}_heat_needed"
-        self._attr_device_info = device_info(entry)
+        self._attr_device_info = device_info(hass, entry)

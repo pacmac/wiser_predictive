@@ -5,12 +5,22 @@ decision are specified in docs/SPEC.md and are not built yet.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 
 def is_room(attrs: Mapping[str, Any]) -> bool:
     """Wiser room thermostats carry is_passive; the hot water channel does not."""
     return "is_passive" in attrs
+
+
+def rooms_of_hub(candidates: Iterable[tuple[str, str, Mapping[str, Any]]], hub: str) -> list[str]:
+    """Entity ids of the rooms on one hub. candidates are (entity_id, hub_id, attributes)."""
+    return sorted(entity_id for entity_id, hub_id, attrs in candidates if hub_id == hub and is_room(attrs))
+
+
+def single_hub(hubs: Sequence[str]) -> str | None:
+    """The hub to use without asking, when there is exactly one; None means the user must choose (or there is none)."""
+    return hubs[0] if len(hubs) == 1 else None
 
 
 def room_name(entity_id: str, attrs: Mapping[str, Any]) -> str:

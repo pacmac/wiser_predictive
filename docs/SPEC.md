@@ -16,6 +16,7 @@ Replaces the YAML predictor (`pac_predictive_heat`, `predictive_lounge`, automat
 custom_components/wiser_predictive/
   model.py          pure Python, NO homeassistant imports: fit, time_to_minimum, lead, decision
   const.py
+  hub.py            HA-side hub lookups: hub name, hub device, rooms of a hub
   manifest.json
   __init__.py  config_flow.py  sensor.py  binary_sensor.py  translations/en.json
 tests/              pytest on model.py; fixtures cut from the archived history
@@ -45,11 +46,21 @@ One `binary_sensor.heat_needed`, attributes: room that triggered, time_to_minimu
 ## CONFIG (config flow, editable in the HA UI)
 Outside sensor, rooms, buffer, announce target, heating-state sensor.
 
+## HUB (Peter, 2026-11-07)
+A house can have more than one Wiser hub (here two: `03E34F` has all the rooms; `05C5D8` has the boiler channels only). Each hub is its own `wiser` config entry, and each room device is linked to its hub (`via_device`).
+- Setup: no `wiser` entry, abort with a reason. Exactly one hub, it is selected automatically and the hub step is skipped. More than one, the user selects the hub first; rooms are then discovered from that hub only.
+- One Wiser Predictive entry per hub (unique id = the hub's config entry id).
+- The selected hub is SHOWN: in the entry title ("Wiser Predictive (Wiser HeatHub (03E34F))"), as the device's "connected via" hub, and as a diagnostic `Hub` sensor on the device.
+- A hub with no rooms is refused at the rooms step ("no rooms found on this hub").
+- The hub cannot be changed in the options form (it would orphan the entities); remove and add again.
+- Entries made before this (version 0.1.0, no hub) are not migrated: remove and add again.
+
 ## NOTHING HARD-CODED (Peter, 2026-11-07)
 The integration must work in any house with a Wiser system. No entity id, room name, hub name or site name of this house appears in the code or as a default.
-- Rooms are DISCOVERED: climate entities registered by the `wiser` integration that carry `is_passive` (Wiser rooms do; the hot water channel does not). The user can untick any. Room names come from the entity's own `name`, falling back to `friendly_name`, then the entity id.
+- The HUB is selected, never assumed (see HUB below).
+- Rooms are DISCOVERED from the selected hub: climate entities of that hub's `wiser` config entry that carry `is_passive` (Wiser rooms do; the hot water channel does not). The user can untick any. Room names come from the entity's own `name`, falling back to `friendly_name`, then the entity id.
 - Outside sensor: NO default. The user picks a temperature sensor. (In this house the garage roofspace sensor fits best, r 0.88 with the forecast, lags 2 h, about 1.4 °C warm; that is this house's choice at setup, not code.)
-- Heating-state sensor (which Wiser hub's heating): chosen by the user, no default. (In this house it is Hub A `sensor.wiser_heating`, NOT `_channel_1`, which is Hub B.)
+- Heating-state sensor: offered from the selected hub's own device, chosen by the user. (In this house it is Hub A `sensor.wiser_heating`, NOT `_channel_1`, which is Hub B.)
 - Minimum per room comes from the climate attributes (`target_temp_low`, else `temperature`), never a number in code.
 - `deploy.py` is a development tool: the ssh command comes from the environment (`HA_SSH`), not from the repo.
 - House facts live in this spec's notes and the handover, not in `custom_components/`.
