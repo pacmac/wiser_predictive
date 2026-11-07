@@ -31,7 +31,7 @@ def device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo:
     hub_id = entry.data.get(CONF_HUB)
     hub_dev = hubs.hub_device(hass, hub_id) if hub_id else None
     if hub_dev is not None:
-        info["via_device"] = next(iter(hub_dev.identifiers))
+        info["via_device_id"] = hub_dev.id
     return info
 
 
