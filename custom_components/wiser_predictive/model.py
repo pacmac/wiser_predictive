@@ -108,6 +108,12 @@ def heat_needed(margin_c: float | None, was_on: bool, trigger: float) -> bool | 
     return was_on
 
 
+def rearmed(margin_c: float | None, trigger: float) -> bool:
+    """A room whose minimum was put up stays quiet until it has climbed to trigger + REARM above the new one (the same
+    level at which the margin rule turns a room off), so a step-up of the target is not announced as a cooling room."""
+    return margin_c is not None and margin_c >= round(trigger + REARM, 2)
+
+
 def hub_link(hub_device_id: str | None, hub_identifiers: Iterable[tuple[str, str]], accepts_id: bool) -> dict[str, Any]:
     """Device-registry keyword that connects our device via the Wiser hub. Newer Home Assistant takes via_device_id
     (via_device is deprecated and stops working in 2027.8); older Home Assistant only knows via_device."""
@@ -149,6 +155,7 @@ class MinimumMemory:
 
     def __init__(self) -> None:
         self._held: dict[str, float] = {}
+        self._stepped: set[str] = set()
 
     def minimum(self, room: str, attrs: Mapping[str, Any]) -> tuple[float | None, bool]:
         """(minimum, held). held is True when the minimum is the remembered pre-boost one."""
@@ -157,8 +164,17 @@ class MinimumMemory:
         if raised:
             return self._held.get(room), True
         if current is not None:
+            previous = self._held.get(room)
+            if previous is not None and current > previous + 1e-9:
+                self._stepped.add(room)  # the schedule (or a hand) put the minimum UP: the room did not cool
             self._held[room] = current
         return current, False
+
+    def take_step_up(self, room: str) -> bool:
+        """True once after the room's minimum was put up (and not by a boost). The replay ignores these too."""
+        had = room in self._stepped
+        self._stepped.discard(room)
+        return had
 
     def margin(self, room: str, attrs: Mapping[str, Any]) -> tuple[float | None, float | None, bool]:
         """(margin, minimum, held)."""

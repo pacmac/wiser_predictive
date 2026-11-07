@@ -45,6 +45,24 @@ def test_a_new_target_set_by_hand_is_learned_when_no_boost_is_on():
     assert mem.margin("lounge", {**LOUNGE, "temperature": 13.0, "current_temperature": 13.4}) == (0.4, 13.0, False)
 
 
+def test_a_step_up_of_the_minimum_is_reported_once_and_a_boost_is_not_one():
+    mem = model.MinimumMemory()
+    mem.margin("lounge", LOUNGE)
+    assert not mem.take_step_up("lounge")
+    mem.margin("lounge", BOOSTED_LOUNGE)
+    mem.margin("lounge", LOUNGE)
+    assert not mem.take_step_up("lounge")  # a boost starting and ending is not a step
+    mem.margin("lounge", {**LOUNGE, "temperature": 19.0})
+    assert mem.take_step_up("lounge") and not mem.take_step_up("lounge")
+    mem.margin("lounge", {**LOUNGE, "temperature": 12.5})
+    assert not mem.take_step_up("lounge")  # lowering it is not one
+
+
+def test_rearmed_at_trigger_plus_the_hysteresis():
+    assert not model.rearmed(0.1, 0.1) and not model.rearmed(None, 0.1) and not model.rearmed(0.2, 0.1)
+    assert model.rearmed(0.3, 0.1)
+
+
 def test_passive_room_minimum_is_the_low_value():
     assert model.minimum_of(BED_3) == 12.0
 

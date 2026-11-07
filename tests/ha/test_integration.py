@@ -185,6 +185,31 @@ async def test_a_boost_raises_the_target_but_margins_stay_against_the_real_minim
     assert hass.states.get(margin).state == "4.5" and not hass.states.get(margin).attributes["minimum_held_during_boost"]
 
 
+async def test_the_schedule_raising_the_target_is_not_announced_as_a_cooling_room(hass):
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
+    calls = async_mock_service(hass, "script", "turn_on")
+    await setup_entry(hass, ["climate.lounge"], announce_script="script.speak")
+    heat = "binary_sensor.wiser_predictive_heat_needed"
+
+    def lounge(temp, target):
+        hass.states.async_set("climate.lounge", "auto", {**LOUNGE, "current_temperature": temp, "temperature": target})
+
+    lounge(13.5, 12.5)  # off: margin 1.0
+    await hass.async_block_till_done()
+    assert hass.states.get(heat).state == "off"
+    lounge(13.5, 19.0)  # the schedule steps the target up: margin -5.5, but the room did not cool
+    await hass.async_block_till_done()
+    assert hass.states.get(heat).state == "off" and calls == []
+    lounge(19.2, 19.0)  # climbing, margin 0.2: still quiet
+    await hass.async_block_till_done()
+    assert hass.states.get(heat).state == "off"
+    lounge(19.3, 19.0)  # margin 0.3: armed again
+    await hass.async_block_till_done()
+    lounge(19.1, 19.0)  # now it really is cooling toward the minimum
+    await hass.async_block_till_done()
+    assert hass.states.get(heat).state == "on" and len(calls) == 1
+
+
 async def test_started_in_the_middle_of_a_boost_the_margin_is_unavailable_not_nonsense(hass):
     boosted = {**LOUNGE, "current_temperature": 17.6, "temperature": 20.5, "is_boosted": True, "is_override": True}
     add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": boosted})
