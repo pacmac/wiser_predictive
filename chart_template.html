@@ -2,105 +2,78 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-/* Layout: a header with the window buttons and a live readout, then four panels on one time axis, then the sources. */
+/* Layout: a headline in words, two big panels (inside, outside) on one time axis, heating shaded across both. Nothing else. */
 :root{
   --bg:#f4f6f4; --panel:#ffffff; --ink:#18211f; --muted:#5a6763; --grid:#e1e7e4; --axis:#b9c4bf;
-  --room:#123f8c; --itrv:#8aa2cf; --set:#b5701a; --out:#0b7a85; --rate-room:#123f8c; --rate-out:#0b7a85;
-  --demand:#c0462a; --heat-band:rgba(192,70,42,.09); --boost-band:rgba(181,112,26,.20); --fc-band:rgba(11,122,133,.06);
+  --in:#123f8c; --out:#0b7a85; --heat:rgba(214,96,48,.20); --heat-ink:#b8481f; --fc:rgba(11,122,133,.06);
   --btn:#e8eeeb; --btn-on:#18211f; --btn-on-ink:#f4f6f4;
 }
 @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
   --bg:#101615; --panel:#171f1d; --ink:#e4ebe8; --muted:#93a29d; --grid:#26322f; --axis:#46544f;
-  --room:#7ea6ff; --itrv:#4c6798; --set:#e0a050; --out:#4cc4cf; --rate-room:#7ea6ff; --rate-out:#4cc4cf;
-  --demand:#ee7a5c; --heat-band:rgba(238,122,92,.10); --boost-band:rgba(224,160,80,.22); --fc-band:rgba(76,196,207,.07);
+  --in:#7ea6ff; --out:#4cc4cf; --heat:rgba(238,122,92,.22); --heat-ink:#ee7a5c; --fc:rgba(76,196,207,.07);
   --btn:#222d2a; --btn-on:#e4ebe8; --btn-on-ink:#101615; color-scheme: dark; } }
 :root[data-theme="dark"]{
   --bg:#101615; --panel:#171f1d; --ink:#e4ebe8; --muted:#93a29d; --grid:#26322f; --axis:#46544f;
-  --room:#7ea6ff; --itrv:#4c6798; --set:#e0a050; --out:#4cc4cf; --rate-room:#7ea6ff; --rate-out:#4cc4cf;
-  --demand:#ee7a5c; --heat-band:rgba(238,122,92,.10); --boost-band:rgba(224,160,80,.22); --fc-band:rgba(76,196,207,.07);
+  --in:#7ea6ff; --out:#4cc4cf; --heat:rgba(238,122,92,.22); --heat-ink:#ee7a5c; --fc:rgba(76,196,207,.07);
   --btn:#222d2a; --btn-on:#e4ebe8; --btn-on-ink:#101615; color-scheme: dark; }
-body{ background:var(--bg); color:var(--ink); font-family:"IBM Plex Sans",system-ui,sans-serif; font-size:14px; line-height:1.45;
-  padding-block:16px 28px; padding-left:max(16px,env(safe-area-inset-left,0px)); padding-right:max(16px,env(safe-area-inset-right,0px)); }
-main{ max-width:1180px; margin:0 auto; display:flex; flex-direction:column; gap:12px; }
-h1{ font-size:20px; font-weight:600; margin:0; letter-spacing:.01em; }
-.sub{ color:var(--muted); margin:2px 0 0; max-width:75ch; }
-.bar{ display:flex; flex-wrap:wrap; gap:12px 20px; align-items:center; justify-content:space-between; }
+body{ background:var(--bg); color:var(--ink); font-family:"IBM Plex Sans",system-ui,sans-serif; font-size:15px; line-height:1.5;
+  padding-block:20px 32px; padding-left:max(16px,env(safe-area-inset-left,0px)); padding-right:max(16px,env(safe-area-inset-right,0px)); }
+main{ max-width:1100px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
+.bar{ display:flex; flex-wrap:wrap; gap:10px 20px; align-items:flex-start; justify-content:space-between; }
+h1{ font-size:22px; font-weight:600; margin:0; }
 .btns{ display:flex; gap:6px; }
-.ctl{ display:flex; flex-wrap:wrap; gap:8px 18px; }
-button{ font:inherit; font-weight:500; color:var(--ink); background:var(--btn); border:0; border-radius:6px; padding:6px 12px; cursor:pointer; }
+button{ font:inherit; font-weight:500; color:var(--ink); background:var(--btn); border:0; border-radius:6px; padding:6px 14px; cursor:pointer; }
 button[aria-pressed="true"]{ background:var(--btn-on); color:var(--btn-on-ink); }
-button:focus-visible{ outline:2px solid var(--room); outline-offset:2px; }
-.key{ display:flex; flex-wrap:wrap; gap:6px 16px; color:var(--muted); font-size:13px; }
-.key i{ display:inline-block; width:18px; height:0; border-top:2px solid; vertical-align:middle; margin-right:6px; }
-.key i.dash{ border-top-style:dashed; } .key i.thin{ border-top-width:1px; }
-.key b{ display:inline-block; width:14px; height:10px; vertical-align:middle; margin-right:6px; border-radius:2px; }
-#readout{ position:sticky; top:env(safe-area-inset-top,0px); z-index:5; background:var(--panel); border-radius:6px; padding:8px 12px;
-  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:13px; min-height:2.9em; display:flex; flex-wrap:wrap; gap:2px 18px; font-variant-numeric:tabular-nums; }
-#readout .t{ color:var(--muted); width:100%; }
-#readout span.k{ color:var(--muted); }
-#chart{ background:var(--panel); border-radius:8px; padding:6px 0; }
+button:focus-visible{ outline:2px solid var(--in); outline-offset:2px; }
+.story{ display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
+.story > div{ background:var(--panel); border-radius:8px; padding:12px 14px; min-width:0; }
+.story .k{ font-size:13px; font-weight:600; display:flex; align-items:center; gap:8px; }
+.story .k i{ width:18px; border-top:3px solid; }
+.story .v{ font-size:19px; font-weight:500; margin-top:2px; font-variant-numeric:tabular-nums; }
+.story .d{ color:var(--muted); font-size:13px; }
+#readout{ background:var(--panel); border-radius:6px; padding:8px 12px; min-height:2.6em; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:13px;
+  font-variant-numeric:tabular-nums; position:sticky; top:env(safe-area-inset-top,0px); z-index:5; }
+#chart{ background:var(--panel); border-radius:8px; padding:8px 0; }
 svg{ display:block; width:100%; touch-action:pan-y; }
-svg text{ fill:var(--muted); font-family:"IBM Plex Sans",system-ui,sans-serif; font-size:11px; }
-svg text.pt{ fill:var(--ink); font-weight:600; font-size:12px; }
+svg text{ fill:var(--muted); font-family:"IBM Plex Sans",system-ui,sans-serif; font-size:12px; }
+svg text.pt{ fill:var(--ink); font-weight:600; font-size:14px; }
+svg text.heat{ fill:var(--heat-ink); font-weight:600; font-size:11px; }
 svg text.mono{ font-family:"IBM Plex Mono",ui-monospace,monospace; }
-.src{ color:var(--muted); font-size:13px; max-width:90ch; }
-.src h2{ font-size:13px; font-weight:600; color:var(--ink); margin:0 0 4px; }
-.src ul{ margin:0; padding-left:18px; }
+.note{ color:var(--muted); font-size:13px; max-width:80ch; }
 </style>
 <main>
   <div class="bar">
-    <div>
-      <h1 id="title">Heating replay</h1>
-      <p class="sub">What the room did, what the weather did, and what the heating did, on one time axis. Past on the left of the dark line, the forecast on the right.</p>
-    </div>
-    <div class="ctl">
-      <div class="btns" role="group" aria-label="Time window">
-        <button data-days="3" aria-pressed="true">3 days</button><button data-days="5" aria-pressed="false">5 days</button><button data-days="10" aria-pressed="false">10 days</button>
-      </div>
-      <div class="btns" role="group" aria-label="Vertical range">
-        <button data-zoom="1" aria-pressed="true" title="Fit the axes to the usual range; boosts and heat-ups run off the edge">Zoom</button><button data-zoom="0" aria-pressed="false" title="Fit the axes to everything">Full range</button>
-      </div>
+    <h1 id="title">Lounge</h1>
+    <div class="btns" role="group" aria-label="Time window">
+      <button data-days="3" aria-pressed="true">3 days</button><button data-days="10" aria-pressed="false">10 days</button>
     </div>
   </div>
-  <div class="key" id="key"></div>
-  <div id="readout" aria-live="off"><span class="t">Move over the chart to read every value at that time.</span></div>
+  <div class="story" id="story"></div>
+  <div id="readout">Move over the chart to read the values at that time.</div>
   <div id="chart"></div>
-  <div class="src" id="src"></div>
+  <p class="note" id="note"></p>
 </main>
 <script>
 const D = /*DATA*/null;
-const state = { days: 3, zoom: true };
-/* Zoom fits an axis to the 3rd-97th percentile of what is drawn. Boosts and the morning heat-up are about 4% of the time
-   in the window, so they sit outside that range and run off the edge instead of flattening the rest. A display choice only. */
-const ZOOM_LO = 0.03, ZOOM_HI = 0.97;
-const quantile = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))];
+const state = { days: 3 };
 const root = document.getElementById('chart');
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmtT = (t, o) => new Date(t * 1000).toLocaleString([], o);
+const hhmm = t => fmtT(t, { hour: '2-digit', minute: '2-digit', hour12: false });
 const num = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? '–' : v.toFixed(d);
 
-/* Panels share the x axis. Each lists its series: kind line | step | area, colour token, and an optional dash. */
-const PANELS = [
-  { id: 'temp', h: 250, title: 'Temperature  °C', fmt: v => v.toFixed(1), zoomable: true, zoomOn: ['reading', 'itrv0', 'itrv1'], series: [
-    { key: 'itrv0', data: () => Object.values(D.itrv)[0] || [], color: '--itrv', w: 1, label: () => Object.keys(D.itrv)[0] },
-    { key: 'itrv1', data: () => Object.values(D.itrv)[1] || [], color: '--itrv', w: 1, dash: '4 3', label: () => Object.keys(D.itrv)[1] },
-    { key: 'setpoint', data: () => D.setpoint, color: '--set', w: 1.5, step: true, dash: '5 3', label: () => 'Setpoint' },
-    { key: 'reading', data: () => D.reading, color: '--room', w: 2.2, label: () => 'Room reading' } ] },
-  { id: 'out', h: 130, title: 'Outside  °C', fmt: v => v.toFixed(1), series: [
-    { key: 'outside', data: () => D.outside, color: '--out', w: 2, label: () => 'Outside, measured' },
-    { key: 'forecast', data: () => D.forecast, color: '--out', w: 2, dash: '5 3', label: () => 'Outside, forecast' } ] },
-  { id: 'rate', h: 150, title: 'Rate of change  °C per hour (last 2 h)', fmt: v => v.toFixed(2), zero: true, zoomable: true, series: [
-    { key: 'outside_rate', data: () => D.outside_rate, color: '--rate-out', w: 1.8, label: () => 'Outside rate' },
-    { key: 'room_rate', data: () => D.room_rate, color: '--rate-room', w: 1.8, label: () => 'Room rate' } ] },
-  { id: 'dem', h: 100, title: 'Heating demand  %', fmt: v => v.toFixed(0), fixed: [0, 100], series: [
-    { key: 'demand', data: () => D.demand, color: '--demand', w: 1.6, step: true, area: true, label: () => 'Room demand' } ] },
-];
-const LEFT = 48, RIGHT = 12, TITLE = 20, GAP = 10, AXIS = 28;
-
+/* The heating shown is the room's own heat-up: Wiser's heating and boost spans merged, short gaps (under 20 min) closed
+   so one heat-up is one band. 20 min is longer than a boost (14-15 min) and shorter than the gap between separate heat-ups. */
+const MERGE_GAP = 20 * 60;
+function heatSpans() {
+  const all = [...D.heating, ...D.boost].filter(([a, b]) => b > a).sort((p, q) => p[0] - q[0]), out = [];
+  for (const [a, b] of all) { const last = out[out.length - 1]; if (last && a - last[1] <= MERGE_GAP) last[1] = Math.max(last[1], b); else out.push([a, b]); }
+  return out;
+}
 function niceTicks(lo, hi, n = 5) {
   const span = hi - lo || 1, raw = span / n, p = Math.pow(10, Math.floor(Math.log10(raw)));
-  const step = [1, 2, 5, 10].map(m => m * p).find(s => s >= raw) || raw;
-  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(6));
+  const step = [1, 2, 5, 10].map(m => m * p).find(s => s >= raw) || raw, out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(6));
   return out;
 }
 function visible(data, x0, x1) {
@@ -109,7 +82,7 @@ function visible(data, x0, x1) {
   if (before) out.unshift([x0, before[1]]);
   return out;
 }
-function at(data, t, step) {           // value at time t: held for step series, interpolated for line series
+function at(data, t, step) {
   let lo = 0, hi = data.length - 1, i = -1;
   while (lo <= hi) { const m = (lo + hi) >> 1; if (data[m][0] <= t) { i = m; lo = m + 1; } else hi = m - 1; }
   if (i < 0) return null;
@@ -118,103 +91,95 @@ function at(data, t, step) {           // value at time t: held for step series,
   const [t0, v0] = data[i], [t1, v1] = data[i + 1];
   return t1 - t0 > 6 * 3600 ? v0 : v0 + (v1 - v0) * (t - t0) / (t1 - t0);
 }
+const within = (data, x0, x1) => data.filter(p => p[0] >= x0 && p[0] <= x1).map(p => p[1]);
 
-let geom = null;
+/* Two panels. Inside is zoomed to its own range (with a little room) so the movement is visible. */
+const PANELS = [
+  { id: 'in', h: 260, title: 'Inside the lounge, °C', color: '--in', lines: () => [{ data: D.reading, w: 2.6 }] },
+  { id: 'out', h: 170, title: 'Outside, °C', color: '--out', lines: () => [{ data: D.outside, w: 2.4 }, { data: D.forecast, w: 2.4, dash: '6 4' }] },
+];
+const LEFT = 46, RIGHT = 12, TITLE = 24, GAP = 14, AXIS = 30;
+
 function render() {
   const W = Math.max(320, root.clientWidth), x0 = D.now - state.days * 86400, x1 = D.end;
   const X = t => LEFT + (t - x0) / (x1 - x0) * (W - LEFT - RIGHT);
-  let y = 6, body = '', tops = [];
+  const heats = heatSpans().filter(([, b]) => b > x0);
+  let y = 4, body = '', first = null;
   for (const p of PANELS) {
-    const own = p.series.filter(s => !p.zoomOn || p.zoomOn.includes(s.key));   // zoom looks at the measured lines, not the setpoint
-    const all = own.flatMap(s => visible(s.data(), x0, x1).map(q => q[1])).sort((a, b) => a - b);
-    let lo = all[0], hi = all[all.length - 1];
-    if (state.zoom && p.zoomable) { lo = quantile(all, ZOOM_LO); hi = quantile(all, ZOOM_HI); }
-    if (p.fixed) [lo, hi] = p.fixed; else { if (p.zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); } const pad = (hi - lo) * .08 || .5; lo -= pad; hi += pad; }
+    const vals = p.lines().flatMap(l => visible(l.data, x0, x1).map(q => q[1]));
+    let lo = Math.min(...vals), hi = Math.max(...vals); const pad = Math.max((hi - lo) * .12, .4); lo -= pad; hi += pad;
     const top = y + TITLE, bot = top + p.h, Y = v => bot - (v - lo) / (hi - lo) * p.h;
-    tops.push({ p, top, bot, Y, lo, hi });
-    body += `<text class="pt" x="${LEFT}" y="${y + 13}">${p.title}</text>`;
-    for (const v of niceTicks(lo, hi)) body += `<line x1="${LEFT}" x2="${W - RIGHT}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css(v === 0 && p.zero ? '--axis' : '--grid')}"/><text class="mono" x="${LEFT - 6}" y="${Y(v) + 4}" text-anchor="end">${p.fmt(v)}</text>`;
+    first = first || top;
+    body += `<text class="pt" x="${LEFT}" y="${y + 16}">${p.title}</text>`;
+    for (const v of niceTicks(lo, hi, 4)) body += `<line x1="${LEFT}" x2="${W - RIGHT}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css('--grid')}"/><text class="mono" x="${LEFT - 8}" y="${Y(v) + 4}" text-anchor="end">${v.toFixed(v % 1 ? 1 : 0)}°</text>`;
     const nowX = X(D.now);
-    body += `<rect x="${nowX}" y="${top}" width="${W - RIGHT - nowX}" height="${p.h}" fill="${css('--fc-band')}"/>`;
-    for (const [a, b] of D.heating) if (b > x0) body += `<rect x="${X(Math.max(a, x0))}" y="${top}" width="${Math.max(1, X(b) - X(Math.max(a, x0)))}" height="${p.h}" fill="${css('--heat-band')}"/>`;
-    for (const [a, b] of D.boost) if (b > x0) body += `<rect x="${X(Math.max(a, x0))}" y="${top}" width="${Math.max(1.5, X(b) - X(Math.max(a, x0)))}" height="${p.h}" fill="${css('--boost-band')}"/>`;
+    body += `<rect x="${nowX}" y="${top}" width="${W - RIGHT - nowX}" height="${p.h}" fill="${css('--fc')}"/>`;
+    for (const [a, b] of heats) body += `<rect x="${X(Math.max(a, x0))}" y="${top}" width="${Math.max(2, X(b) - X(Math.max(a, x0)))}" height="${p.h}" fill="${css('--heat')}"/>`;
     body += `<clipPath id="c-${p.id}"><rect x="${LEFT}" y="${top}" width="${W - LEFT - RIGHT}" height="${p.h}"/></clipPath><g clip-path="url(#c-${p.id})">`;
-    for (const s of p.series) {
-      const pts = visible(s.data(), x0, x1); if (!pts.length) continue;
-      let d = '';
-      pts.forEach(([t, v], i) => { d += (i === 0 ? 'M' : s.step ? `H${X(t)}V` : 'L') + (s.step && i ? '' : X(t) + ' ') + Y(v) + ' '; });
-      if (s.step) d = pts.map(([t, v], i) => (i === 0 ? `M${X(t)} ${Y(v)}` : `H${X(t)}V${Y(v)}`)).join(' ');
-      if (s.area) { const last = pts[pts.length - 1]; body += `<path d="${d} H${X(Math.min(x1, D.now))} V${bot} H${X(pts[0][0])} Z" fill="${css(s.color)}" opacity=".22"/>`; }
-      body += `<path d="${d}" fill="none" stroke="${css(s.color)}" stroke-width="${s.w}" ${s.dash ? `stroke-dasharray="${s.dash}"` : ''} stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+    for (const l of p.lines()) {
+      const pts = visible(l.data, x0, x1); if (!pts.length) continue;
+      body += `<path d="${pts.map(([t, v], i) => (i ? 'L' : 'M') + X(t) + ' ' + Y(v)).join(' ')}" fill="none" stroke="${css(p.color)}" stroke-width="${l.w}" ${l.dash ? `stroke-dasharray="${l.dash}"` : ''} stroke-linejoin="round" stroke-linecap="round"/>`;
     }
     body += '</g>';
+    if (p.id === 'out') body += `<text x="${X(D.now) + 6}" y="${top + 14}">forecast →</text>`;
     y = bot + GAP;
   }
-  // time axis: ticks every 6 h (3 d), 12 h (5 d), 24 h (10 d); the date at each local midnight
-  const stepH = (state.days <= 3 ? 6 : state.days <= 5 ? 12 : 24) * (W < 600 ? 2 : 1), bottom = y - GAP;  // fewer labels on a phone
-  const first = new Date(x0 * 1000); first.setMinutes(0, 0, 0); first.setHours(Math.ceil((first.getHours() + 1) / stepH) * stepH);
-  for (let d = first; d.getTime() / 1000 <= x1; d = new Date(d.getTime() + stepH * 3600e3)) {
+  const bottom = y - GAP, stepH = (state.days <= 3 ? 6 : 24) * (W < 600 ? 2 : 1);
+  const f = new Date(x0 * 1000); f.setMinutes(0, 0, 0); f.setHours(Math.ceil((f.getHours() + 1) / stepH) * stepH);
+  for (let d = f; d.getTime() / 1000 <= x1; d = new Date(d.getTime() + stepH * 3600e3)) {
     const t = d.getTime() / 1000, mid = d.getHours() === 0;
-    body += `<line x1="${X(t)}" x2="${X(t)}" y1="${tops[0].top}" y2="${bottom}" stroke="${css(mid ? '--axis' : '--grid')}" stroke-width="${mid ? 1 : .5}"/>`;
-    body += `<text x="${X(t)}" y="${bottom + 14}" text-anchor="middle">${mid ? fmtT(t, { weekday: 'short', day: 'numeric' }) : String(d.getHours()).padStart(2, '0') + ':00'}</text>`;
+    body += `<line x1="${X(t)}" x2="${X(t)}" y1="${first}" y2="${bottom}" stroke="${css(mid ? '--axis' : '--grid')}" stroke-width="${mid ? 1 : .5}"/>`;
+    body += `<text x="${X(t)}" y="${bottom + 16}" text-anchor="middle">${mid ? fmtT(t, { weekday: 'short', day: 'numeric' }) : String(d.getHours()).padStart(2, '0') + ':00'}</text>`;
   }
+  let lastLabel = -1e9;  // label a heat-up only if there is room for it after the previous label (the text is about 95 px wide)
+  if (state.days <= 3) for (const [a] of heats) if (a >= x0 && X(a) - lastLabel > 100) { body += `<text class="heat" x="${X(a) + 3}" y="${first + 12}">heating ${hhmm(a)}</text>`; lastLabel = X(a); }
   const nowX = X(D.now);
-  body += `<line x1="${nowX}" x2="${nowX}" y1="${tops[0].top}" y2="${bottom}" stroke="${css('--ink')}" stroke-width="1.5"/><text x="${nowX + 4}" y="${tops[0].top + 10}" class="pt">now</text>`;
-  body += `<line id="hv" x1="0" x2="0" y1="${tops[0].top}" y2="${bottom}" stroke="${css('--ink')}" stroke-width="1" stroke-dasharray="2 3" visibility="hidden"/>`;
+  body += `<line x1="${nowX}" x2="${nowX}" y1="${first}" y2="${bottom}" stroke="${css('--ink')}" stroke-width="1.5"/><text class="pt" x="${nowX}" y="${first - 6}" text-anchor="middle">now</text>`;
+  body += `<line id="hv" x1="0" x2="0" y1="${first}" y2="${bottom}" stroke="${css('--ink')}" stroke-dasharray="2 3" visibility="hidden"/>`;
   const H = bottom + AXIS;
-  root.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Room temperature, outside temperature, rates of change and heating demand over time">${body}</svg>`;
-  geom = { W, x0, x1, X };
+  root.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Inside and outside temperature, with the periods the heating was on shaded">${body}</svg>`;
   const svg = root.querySelector('svg'), hv = svg.querySelector('#hv');
   const move = e => {
     const r = svg.getBoundingClientRect(), px = (e.clientX - r.left) * (W / r.width);
     if (px < LEFT || px > W - RIGHT) return;
     const t = x0 + (px - LEFT) / (W - LEFT - RIGHT) * (x1 - x0);
     hv.setAttribute('x1', px); hv.setAttribute('x2', px); hv.setAttribute('visibility', 'visible');
-    readout(t);
+    const future = t > D.now, h = heats.some(([a, b]) => t >= a && t <= b);
+    document.getElementById('readout').innerHTML = future
+      ? `${fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit' })} · forecast outside ${num(at(D.forecast, t, false))}°`
+      : `${fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit' })} · inside ${num(at(D.reading, t, true))}° · outside ${num(at(D.outside, t, true))}° · heating ${h ? 'ON' : 'off'}`;
   };
   svg.addEventListener('pointermove', move); svg.addEventListener('pointerdown', move);
 }
-function readout(t) {
-  const future = t > D.now, row = [];
-  const add = (k, v, u) => row.push(`<span><span class="k">${k}</span> ${v}${u}</span>`);
-  const val = (data, step) => at(data, t, step);
-  const itrvs = Object.entries(D.itrv).map(([k, s]) => [k, val(s, true)]);
-  if (!future) {
-    add('Room', num(val(D.reading, true)), '°C'); itrvs.forEach(([k, v]) => add(k, num(v), '°C'));
-    add('Setpoint', num(val(D.setpoint, true)), '°C'); add('Outside', num(val(D.outside, true)), '°C');
-    add('Room rate', num(val(D.room_rate, false), 2), '°C/h'); add('Outside rate', num(val(D.outside_rate, false), 2), '°C/h');
-    add('Demand', num(val(D.demand, true), 0), '%');
-    const inBoost = D.boost.some(([a, b]) => t >= a && t <= b), inHeat = D.heating.some(([a, b]) => t >= a && t <= b);
-    if (inBoost) add('', 'boost', ''); else if (inHeat) add('', 'heating', '');
-  } else {
-    add('Outside forecast', num(val(D.forecast, false)), '°C'); add('Outside rate', num(val(D.outside_rate, false), 2), '°C/h');
-  }
-  document.getElementById('readout').innerHTML = `<span class="t">${fmtT(t, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${future ? ' (forecast)' : ''}</span>${row.join('')}`;
+
+function story() {
+  const x0 = D.now - state.days * 86400, days = state.days;
+  const sum = (data, label, colorVar) => {
+    const v = within(data, x0, D.now); if (!v.length) return '';
+    const start = at(data, x0, true) ?? v[0], now = v[v.length - 1], lo = Math.min(...v), hi = Math.max(...v);
+    const change = now - start;
+    return `<div><div class="k"><i style="border-color:var(${colorVar})"></i>${label}</div>
+      <div class="v">${num(now)}° now</div>
+      <div class="d">${days} days ago ${num(start)}°, lowest ${num(lo)}°, highest ${num(hi)}°. ${Math.abs(change) < .15 ? 'About the same.' : change < 0 ? `Down ${num(-change)}°.` : `Up ${num(change)}°.`}</div></div>`;
+  };
+  const heats = heatSpans().filter(([, b]) => b > x0), mins = Math.round(heats.reduce((s, [a, b]) => s + (Math.min(b, D.now) - Math.max(a, x0)) / 60, 0));
+  const when = heats.length ? heats.slice(-3).map(([a]) => fmtT(a, { weekday: 'short', hour: '2-digit', minute: '2-digit' })).join(', ') : '';
+  document.getElementById('story').innerHTML = sum(D.reading, 'Inside the lounge', '--in') + sum(D.outside, 'Outside', '--out') +
+    `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Heating on</div>
+      <div class="v">${heats.length} ${heats.length === 1 ? 'time' : 'times'}, ${mins} min in all</div>
+      <div class="d">${heats.length ? `Latest: ${when}.` : 'It did not come on.'}</div></div>`;
 }
+
 function init() {
-  const room = D.room.charAt(0).toUpperCase() + D.room.slice(1);
-  document.getElementById('title').textContent = `${room}: heating replay`;
-  document.getElementById('key').innerHTML = [
-    ['<i></i>', 'Room reading'], ['<i class="thin"></i>', 'Valve sensors'], ['<i class="dash"></i>', 'Setpoint / forecast'],
-    ['<b style="background:var(--boost-band)"></b>', 'Boost'], ['<b style="background:var(--heat-band)"></b>', 'Heating on'], ['<b style="background:var(--fc-band)"></b>', 'Future'],
-  ].map(([s, t]) => `<span>${s}${t}</span>`).join('');
-  document.getElementById('src').innerHTML = `<h2>Where every line comes from</h2><ul>
-    <li>Room reading, setpoint, demand, boost and heating: the Wiser climate entity's own history (${D.reading.length} readings). The reading is the blend of the valve sensors.</li>
-    <li>Valve sensors: the iTRV temperature sensors of this room.</li>
-    <li>Outside, measured: the outside temperature sensor fed by the weather service. Outside forecast: the hourly forecast read at ${fmtT(D.now, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}.</li>
-    <li>Rates: the slope of a straight line through the last 2 hours, in °C per hour. The sensors move in 0.1 °C steps, so a 2-hour slope resolves 0.05 °C/h. For the forecast the same slope is taken over the forecast curve.</li>
-    <li>Built ${D.built.replace('T', ' ').replace('+00:00', ' UTC')}. The model's prediction and the decision trace are added on this chart in the next stage.</li></ul>`;
+  document.getElementById('title').textContent = D.room.charAt(0).toUpperCase() + D.room.slice(1);
+  document.getElementById('note').textContent = `Recorded history up to ${fmtT(D.now, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}; the outside forecast is the weather service's hourly forecast. Heating is the room's boost and heating spans from Wiser. Built ${D.built.replace('T', ' ').replace('+00:00', ' UTC')}. The prediction is added to this chart in the next stage.`;
   document.querySelectorAll('button[data-days]').forEach(b => b.addEventListener('click', () => {
     state.days = +b.dataset.days; document.querySelectorAll('button[data-days]').forEach(o => o.setAttribute('aria-pressed', o === b));
-    render();
-  }));
-  document.querySelectorAll('button[data-zoom]').forEach(b => b.addEventListener('click', () => {
-    state.zoom = b.dataset.zoom === '1'; document.querySelectorAll('button[data-zoom]').forEach(o => o.setAttribute('aria-pressed', o === b));
-    render();
+    story(); render();
   }));
   let tm; window.addEventListener('resize', () => { clearTimeout(tm); tm = setTimeout(render, 80); });
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
-  render();
+  story(); render();
 }
 init();
 </script>
