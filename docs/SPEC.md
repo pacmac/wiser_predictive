@@ -44,7 +44,7 @@ Per room, each time its state changes:
 2. `heat_needed` is ON when `margin <= trigger`, OFF when `margin >= trigger + 0.2`, and keeps its state in between (hysteresis).
 3. A room that is being heated, boosted or overridden (`is_heating`, `is_boosted`, `is_override`, Wiser's own flags) is OFF: the episode is over.
 4. Unknown margin gives unknown, never off.
-Derived numbers (replay, 8 days, 9 touches of the lounge minimum): trigger 0.1 °C = one sensor step, the only offset of 0.1-0.4 that caught all 9 touches (13 fires, 4 false alarms, warning 11-120 min, median 71); the 0.2 °C hysteresis = two sensor steps, so a one-step flicker cannot flap it. NO cooldown: with the hysteresis, consecutive fires are never closer than 65 min. Known weakness: the shortest warning (11 min) is shorter than the longest boost heat-up (up to 28 min by the chart's measure).
+Derived numbers (replay, 8 days, 9 touches of the lounge minimum): trigger 0.1 °C = one sensor step, the only offset of 0.1-0.4 that caught all 9 touches (13 fires, 4 false alarms, warning 11-120 min, median 71); the 0.2 °C hysteresis = two sensor steps, so a one-step flicker cannot flap it. NO cooldown: with the hysteresis, consecutive fires are never closer than 65 min. Known weakness: two of the 9 touches had warning under 20 min (11 min: a fast fall; 18 min: a target raise). Boost heat-up to +0.3 °C is 6-14 min for a single boost (every boost flag lasts 14-15 min) and 25-28 min when boosts are chained, so those two warnings can be too short.
 The thermal-mass options (time near the minimum plus outside temperature; cumulative degree-hours) are NOT built and remain open for testing against the replay.
 
 ## ENTITIES

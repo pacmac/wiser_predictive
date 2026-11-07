@@ -9,7 +9,7 @@ folder and run `/handover read`. Predecessor session `ha` (folder `ha/inventory`
 ## STATE
 | item | verdict | check |
 |---|---|---|
-| repo `pacmac/wiser_predictive` | **local is 2 commits ahead of origin: NOT PUSHED** (AFK rule). origin = `f19fe0d`, local HEAD = `27dc203` | `git status -sb` |
+| repo `pacmac/wiser_predictive` | **local is 3 commits ahead of origin: NOT PUSHED** (AFK rule). origin = `f19fe0d`, local HEAD = `d17d031` (plus any later docs commit) | `git status -sb` |
 | tests | 47 plain + 10 under real HA = 57 pass | `python3 -m pytest -q tests`; HA suite below |
 | HA suite | needs the harness venv. It was in the session scratchpad and may be gone: `python3 -m venv V && V/bin/pip install pytest-homeassistant-custom-component`, then `V/bin/python -m pytest tests -q -o asyncio_mode=auto`. Harness is HA 2026.2.3, the box is 2026.10.4 | |
 | box runs | commit `75bbc6c`'s code: hub selection, margin sensors real, `Heat needed` = `unknown`, no announcement, `via_device` (works, logs a deprecation warning) | `HA_SSH=/usr/share/pac/dev/bash/sshhauk python3 -I deploy.py` (dry run lists the changed files) |
@@ -26,7 +26,8 @@ folder and run `/handover read`. Predecessor session `ha` (folder `ha/inventory`
 
 ## OPEN
 - **Peter has not confirmed any of the above.** Nothing in 1-6 is on the box.
-- Known weakness: the shortest warning (11 min) is shorter than the longest boost heat-up (28 min by the old chart; my own measure says 6-14 and the two disagree: the chart's 25/28 min boosts show 14 min in the raw rows; I could not reconcile the definitions).
+- Heat-up figures RECONCILED (re-read the raw lounge rows, 2026-11-07): every boost flag lasts 14-15 min. `replay.heatups` counts the 6 unchained boosts: 6, 7, 8, 10, 14, 14 min to +0.3 C. The chart's 25 and 28 min are boosts that came back to back (the second starts before the reading has risen 0.3 C from the first), which `heatups` stops at on purpose. Both are right; they measure different things. Check: scratch probe printed the boost starts and the readings after each.
+- Known weakness, narrower than first stated: of the 9 lounge touches, two had warning under 20 min: 11 min (a fast fall, 13.7 to 13.0 in 2 h; inside the 14 min unchained heat-up) and 18 min (a target raise from 13.0 to 13.5, not cooling). The other 7 had 37-120 min. Chained boosts need 25-28 min, which would also outlast those two.
 - Thermal mass (Peter): the air reading is not the fabric temperature. Lounge sits within 0.3 C of its minimum for ~60 h because Wiser parks it there. The margin rule fires when the air is already near the setpoint; options 1 and 2 are the candidates to test in `replay.py`.
 - The margin rule has been replayed on 8 days only. It has never run live.
 
