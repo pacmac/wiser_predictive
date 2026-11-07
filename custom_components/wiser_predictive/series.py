@@ -9,29 +9,34 @@ import datetime
 from typing import Any, Iterable, Mapping, Sequence
 
 try:
-    from . import model, thermal
+    from . import learning, model, thermal
 except ImportError:  # loaded as plain modules by chart.py and the tests
+    import learning
     import model
     import thermal
 
 HORIZON_H = 24  # hours of forecast drawn ahead of now (docs/SPEC.md, VISUALISATION: past days to 24 h ahead)
 
 
-def character_of(climate, outside) -> dict[str, Any] | None:
-    """The room's thermal character (time constant, outdoor coupling, daily-swing delay) with its uncertainty, as a plain dict."""
+def learn_without_memory(climate, outside, now: float) -> dict[str, Any] | None:
+    """What learner.learn returns, from the history given alone (nothing kept between runs): for the preview and the tests."""
     from dataclasses import asdict
 
     prepared = thermal.prepare(climate, outside)
-    found = None if prepared is None else thermal.describe(thermal.cooling_windows(*prepared[1:]))
-    return None if found is None else asdict(found)
+    if prepared is None:
+        return None
+    grid, temps, heating, outs = prepared
+    found = learning.summarise(learning.day_stats(grid, thermal.cooling_windows(temps, heating, outs)), int(now // learning.DAY_S))
+    return None if found is None else {"character": asdict(found["character"]), "params": found["params"], "info": found["info"]}
 
 
-def predict(climate, outside, forecast, now: float, low: float | None, heating_now: bool) -> tuple[dict[str, Any] | None, list[str]]:
+def predict(climate, outside, forecast, now: float, low: float | None, heating_now: bool, params=None) -> tuple[dict[str, Any] | None, list[str]]:
     """Learn the room's cooling from its history and predict the next day. Returns (prediction or None, notes saying why not).
     low is the room's own LOW setting if it has one; otherwise its floor is the lowest target it held for an hour or more."""
     notes: list[str] = []
-    prepared = thermal.prepare(climate, outside)
-    params = None if prepared is None else thermal.fit(thermal.cooling_samples(*prepared[1:]))
+    if params is None:  # not given the learned model: fit from the history given
+        prepared = thermal.prepare(climate, outside)
+        params = None if prepared is None else thermal.fit(thermal.cooling_samples(*prepared[1:]))
     if params is None:
         return None, ["Not enough free-cooling history yet to learn this room's cooling: it needs a day or more with the heating off."]
     readings = [(t, a["current_temperature"]) for t, a in sorted(climate, key=lambda r: r[0]) if a.get("current_temperature") is not None]
@@ -85,6 +90,7 @@ def build(
     built: str | None = None,
     prediction: Mapping[str, Any] | None = None,
     character: Mapping[str, Any] | None = None,
+    learning_info: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """climate is [(seconds, attributes)] of the room's climate entity; outside and forecast are [(seconds, degrees C)]."""
     rows = sorted(climate, key=lambda r: r[0])
@@ -102,6 +108,7 @@ def build(
         "boost": [[round(a), round(b)] for a, b in boost],
         "prediction": dict(prediction) if prediction else None,
         "character": dict(character) if character else None,
+        "learning": dict(learning_info) if learning_info else None,
         "notes": list(notes),
         "built": built or datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="minutes"),
     }

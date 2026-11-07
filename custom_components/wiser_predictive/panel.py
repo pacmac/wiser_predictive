@@ -17,15 +17,12 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from dataclasses import asdict
-
-from . import history, model, series, thermal
+from . import history, learner, model, series
 from .const import CONF_OUTSIDE, CONF_ROOMS, CONF_WEATHER, DOMAIN
+from .learner import LEARN_DAYS
 from .sensor import room_label
 
 _LOGGER = logging.getLogger(__name__)
-
-LEARN_DAYS = 10  # days of history the model learns from: the replay trained on 6 and scored on the next 4 of these 10
 
 STATIC_URL = "/wiser_predictive_static"
 PANEL_PATH = "wiser-predictive"
@@ -87,18 +84,18 @@ async def ws_rooms(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
     out = []
     for room in rooms:
         climate = [(s.last_updated.timestamp(), dict(s.attributes)) for s in states.get(room, [])]
-        prepared = thermal.prepare(climate, outside)
-        found = None if prepared is None else thermal.describe(thermal.cooling_windows(*prepared[1:]))
-        out.append({"entity_id": room, "name": room_label(hass, room), "character": None if found is None else asdict(found)})
+        found = await learner.learn(hass, room, climate, outside, now.timestamp())
+        out.append({"entity_id": room, "name": room_label(hass, room), "character": None if found is None else found["character"],
+                    "learning": None if found is None else found["info"]})
     connection.send_result(msg["id"], {"rooms": out, "notes": notes})
 
 
-def predict_room(hass, room, climate, outside, forecast, now, notes: list[str]) -> dict[str, Any] | None:
+def predict_room(hass, room, climate, outside, forecast, now, notes: list[str], params=None) -> dict[str, Any] | None:
     """Learn the room's cooling from its recorded history, then predict the next day with the forecast. Says why when it cannot."""
     state = hass.states.get(room)
     attrs = state.attributes if state is not None else {}
     low = model.minimum_of(attrs) if attrs.get("target_temp_low") is not None else None
-    result, why = series.predict(climate, outside, forecast, now, low, bool(attrs.get("is_heating") or attrs.get("is_boosted")))
+    result, why = series.predict(climate, outside, forecast, now, low, bool(attrs.get("is_heating") or attrs.get("is_boosted")), params)
     notes.extend(why)
     return result
 
@@ -159,9 +156,10 @@ async def ws_chart(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
     if msg["outside_offset"]:
         forecast = [(t, v + msg["outside_offset"]) for t, v in forecast]
         notes.append(f"What-if: the forecast outside temperature is shifted by {msg['outside_offset']:+.0f}°.")
-    prediction = predict_room(hass, room, climate, outside, forecast, now.timestamp(), notes)
+    found = await learner.learn(hass, room, climate, outside, now.timestamp())  # remembers the room's completed days, then fits from all
+    prediction = predict_room(hass, room, climate, outside, forecast, now.timestamp(), notes, None if found is None else found["params"])
     chart = series.build(room_label(hass, room), climate, outside, forecast, now.timestamp(), notes, prediction=prediction,
-                         character=series.character_of(climate, outside))
+                         character=None if found is None else found["character"], learning_info=None if found is None else found["info"])
     connection.send_result(msg["id"], {"entries": listing, "entry_id": entry.entry_id, "room": room, "chart": chart})
 
 

@@ -84,6 +84,15 @@ function at(data, t, step) {
 }
 const within = (data, x0, x1) => data.filter(p => p[0] >= x0 && p[0] <= x1).map(p => p[1]);
 
+/* How the figures were learned: every completed day is kept, so the number of days grows; once 14 days are kept the forgetting
+   rate (how fast old days fade) is chosen by predicting each recent day from the days before it. */
+function learnedText(info, ch) {
+  const days = info ? info.days : ch.days, windows = info ? info.windows : ch.windows;
+  const fade = !info ? '' : info.half_life_days ? ` Older days fade with a half-life of ${info.half_life_days} days, chosen by predicting each recent day from the days before it.`
+    : info.chosen_by_days ? ' No fading predicted best, so every day counts equally.' : ' No fading yet: choosing one needs 14 days.';
+  return `Learned from ${windows} windows over ${days} days, kept as they complete.${fade}`;
+}
+
 function heatSpans(D) {
   const all = [...D.heating, ...D.boost].filter(([a, b]) => b > a).sort((p, q) => p[0] - q[0]), out = [];
   for (const [a, b] of all) { const last = out[out.length - 1]; if (last && a - last[1] <= MERGE_GAP) last[1] = Math.max(last[1], b); else out.push([a, b]); }
@@ -212,7 +221,7 @@ class WiserPredictivePanel extends HTMLElement {
     const character = ch ? `<div><div class="k"><i style="border-color:var(--muted)"></i>${D.name.replace(/</g, '&lt;')}: thermal character</div>
         <div class="v">τ ${pm(ch.tau_h, ch.tau_se_h, 1)} h</div>
         <div class="d">Thermal time constant: time to cover 63% of a change in the outside temperature. Outdoor coupling ${pm(ch.coupling, ch.coupling_se, 2)}. A daily outside swing arrives ${ch.delay_h.toFixed(1)} h late and shrunk to ${Math.round(ch.damping * 100)}%. Settles at ${ch.settles[8].toFixed(1)}° when it is 8° outside.</div>
-        <div class="d">From ${ch.windows} windows over ${ch.days} days; ± is how far it moves if any one day is left out.</div></div>` : '';
+        <div class="d">${learnedText(D.learning, ch)} ± is how far it moves if any one day is left out; it narrows as days are added.</div></div>` : '';
     this.$('story').innerHTML = predicted + plan + character + sum(D.reading, 'Inside', '--in') + sum(D.outside, 'Outside', '--out') +
       `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Heating on</div><div class="v">${heats.length} ${heats.length === 1 ? 'time' : 'times'}, ${mins} min in all</div>
         <div class="d">${heats.length ? `Latest: ${when}.` : 'It did not come on.'}</div></div>`;

@@ -396,6 +396,43 @@ async def test_the_panel_learns_the_rooms_cooling_and_predicts_the_next_day(hass
     assert chart["notes"] == ["Not enough heat runs in the history yet to learn how the room heats up, so no heating plan."]  # no boosts in this history
 
 
+async def test_completed_days_are_kept_so_memory_outlives_the_recorder(hass, hass_ws_client, hass_storage):
+    import math
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
+    await setup_entry(hass, ["climate.lounge"], outside_sensor=OUTSIDE)
+    steps, t = 8 * 144, 19.0
+    lounge_states, outside_states = [], []
+    for k in range(steps):
+        d, h = k // 144, (k % 144) / 6.0
+        out = 8.0 + 3.0 * math.sin(2 * math.pi * h / 24) + (d % 3)
+        reheat = d > 0 and d % 3 == 0 and 6.0 <= h < 7.0
+        if reheat:
+            t = 19.0
+        ago = (steps - k) * 10
+        lounge_states.append(_state("climate.lounge", "heat", {**LOUNGE, "current_temperature": round(t, 1), "is_heating": reheat}, ago))
+        outside_states.append(_state(OUTSIDE, f"{out:.2f}", {}, ago))
+        t += (1 / 6) * (0.25 - t / 20.0 + 0.03 * out)
+
+    async def ask(lounge, outside):
+        reply = await _chart(hass, hass_ws_client, {"climate.lounge": lounge, OUTSIDE: outside})
+        return reply["result"]["chart"]
+
+    first = await ask(lounge_states, outside_states)
+    assert first["learning"]["days"] >= 7, first["notes"]
+    # the recorder now holds only the last two days: everything earlier must still be remembered
+    recent = 2 * 144
+    second = await ask(lounge_states[-recent:], outside_states[-recent:])
+    assert second["learning"]["days"] >= 7 and second["character"] is not None
+    # and it is on disk, not just in memory
+    async_fire_time_changed(hass, dt_util.utcnow() + datetime.timedelta(seconds=30))
+    await hass.async_block_till_done()
+    saved = hass_storage["wiser_predictive.learned"]["data"]["rooms"]["climate.lounge"]
+    assert len(saved) >= 6 and all(len(s) == 11 for s in saved.values())
+
+
 async def test_the_rooms_command_describes_each_room_with_its_uncertainty(hass, hass_ws_client):
     import math
 

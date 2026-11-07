@@ -55,9 +55,11 @@ def build(room, data, offset=0.0):
     forecast = [(t, v + offset) for t, v in forecast_rows(load(d / "forecast_hourly.json"))]
     latest = max(climate, key=lambda r: r[0])[1]
     low = latest.get("target_temp_low")
-    prediction, notes = series.predict(climate, outside, forecast, now, low, bool(latest.get("is_heating") or latest.get("is_boosted")))
+    found = series.learn_without_memory(climate, outside, now)  # the preview keeps nothing between runs
+    prediction, notes = series.predict(climate, outside, forecast, now, low, bool(latest.get("is_heating") or latest.get("is_boosted")),
+                                       None if found is None else found["params"])
     chart = series.build(room.replace("_", " ").title(), climate, outside, forecast, now, notes, prediction=prediction,
-                         character=series.character_of(climate, outside))
+                         character=None if found is None else found["character"], learning_info=None if found is None else found["info"])
     return {"entries": [{"entry_id": "preview", "title": "Preview", "rooms": [{"entity_id": f"climate.wiser_{room}", "name": chart["name"]}]}],
             "entry_id": "preview", "room": f"climate.wiser_{room}", "chart": chart}
 
@@ -72,9 +74,10 @@ def rooms_payload(data):
     out = []
     for path in sorted(d.glob("climate.wiser_*.json")):
         name = path.stem.replace("climate.wiser_", "")
-        prepared = thermal.prepare(climate_rows(load(path)), outside)
-        found = None if prepared is None else thermal.describe(thermal.cooling_windows(*prepared[1:]))
-        out.append({"entity_id": f"climate.wiser_{name}", "name": name.replace("_", " ").title(), "character": None if found is None else asdict(found)})
+        rows = climate_rows(load(path))
+        found = series.learn_without_memory(rows, outside, max(t for t, _ in rows))
+        out.append({"entity_id": f"climate.wiser_{name}", "name": name.replace("_", " ").title(),
+                    "character": None if found is None else found["character"], "learning": None if found is None else found["info"]})
     return {"rooms": out, "notes": []}
 
 
