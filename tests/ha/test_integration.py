@@ -257,3 +257,100 @@ async def test_options_change_the_trigger_and_keep_the_hub(hass):
     assert done["type"] == FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
     assert entry.options["trigger_margin"] == 0.3 and entry.data["hub"] == "hub-a"
+
+
+# --- the panel: websocket command, registration, the weather suggestion ------------------------------------------------
+
+import datetime  # noqa: E402
+from unittest.mock import AsyncMock, patch  # noqa: E402
+
+from homeassistant.core import State  # noqa: E402
+
+from custom_components.wiser_predictive import history as history_mod, panel as panel_mod  # noqa: E402
+
+NOW = datetime.datetime(2026, 11, 7, 10, 0, tzinfo=datetime.timezone.utc)
+
+
+def _state(entity_id, state, attrs, minutes_ago):
+    t = NOW - datetime.timedelta(minutes=minutes_ago)
+    return State(entity_id, state, attrs, last_changed=t, last_updated=t)
+
+
+async def _chart(hass, hass_ws_client, states, forecast=None, **msg):
+    client = await hass_ws_client(hass)
+    with patch.object(history_mod, "fetch", AsyncMock(return_value=states) if not isinstance(states, Exception) else AsyncMock(side_effect=states)), \
+            patch.object(history_mod, "hourly_forecast", AsyncMock(return_value=forecast or [])), \
+            patch("homeassistant.util.dt.utcnow", return_value=NOW):
+        await client.send_json({"id": 1, "type": "wiser_predictive/chart", **msg})
+        return await client.receive_json()
+
+
+async def test_the_panel_command_returns_the_room_outside_forecast_and_heating(hass, hass_ws_client):
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE, "climate.bed_3": BED})
+    await setup_entry(hass, ["climate.lounge", "climate.bed_3"], weather_entity="weather.home", outside_sensor=OUTSIDE)
+    states = {
+        "climate.lounge": [_state("climate.lounge", "heat", {**LOUNGE, "current_temperature": 12.5}, 120),
+                           _state("climate.lounge", "heat", {**LOUNGE, "current_temperature": 13.0, "is_heating": True}, 60),
+                           _state("climate.lounge", "heat", {**LOUNGE, "current_temperature": 13.4}, 30)],
+        OUTSIDE: [_state(OUTSIDE, "7.5", {}, 100), _state(OUTSIDE, "unavailable", {}, 50), _state(OUTSIDE, "6.9", {}, 10)],
+    }
+    forecast = [{"datetime": "2026-11-07T11:00:00+00:00", "temperature": 6.0}, {"datetime": "2026-11-07T12:00:00+00:00", "temperature": 5.5}]
+    reply = await _chart(hass, hass_ws_client, states, forecast)
+    assert reply["success"], reply
+    result, chart = reply["result"], reply["result"]["chart"]
+    assert result["room"] == "climate.lounge"
+    assert [r["name"] for r in result["entries"][0]["rooms"]] == ["Lounge", "Bed 3"]
+    assert [v for _, v in chart["reading"]] == [12.5, 13.0, 13.4]
+    assert [v for _, v in chart["outside"]] == [7.5, 6.9]  # 'unavailable' is skipped, not drawn as a value
+    assert [v for _, v in chart["forecast"]] == [6.0, 5.5]
+    start, end = chart["heating"][0]
+    assert end - start == 30 * 60 and chart["notes"] == []  # heating from the 60-minutes-ago row to the next row
+
+
+async def test_the_panel_command_uses_the_weather_entitys_temperature_when_there_is_no_sensor(hass, hass_ws_client):
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
+    await setup_entry(hass, ["climate.lounge"], weather_entity="weather.home", outside_sensor=None)
+    states = {"climate.lounge": [_state("climate.lounge", "heat", LOUNGE, 5)],
+              "weather.home": [_state("weather.home", "cloudy", {"temperature": 8.2}, 60)]}
+    reply = await _chart(hass, hass_ws_client, states, room="climate.lounge", days=10)
+    assert [v for _, v in reply["result"]["chart"]["outside"]] == [8.2]
+
+
+async def test_the_panel_says_what_is_missing_instead_of_drawing_nothing_silently(hass, hass_ws_client):
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
+    await setup_entry(hass, ["climate.lounge"], outside_sensor=None)  # no weather entity, no outside sensor
+    reply = await _chart(hass, hass_ws_client, {"climate.lounge": [_state("climate.lounge", "heat", LOUNGE, 5)]})
+    notes = " ".join(reply["result"]["chart"]["notes"])
+    assert "No outside temperature" in notes and "no forecast" in notes
+    broken = await _chart(hass, hass_ws_client, RuntimeError("recorder is off"))
+    assert broken["result"]["chart"]["reading"] == [] and "History could not be read" in " ".join(broken["result"]["chart"]["notes"])
+
+
+async def test_the_command_errors_when_the_integration_has_no_entry(hass, hass_ws_client):
+    from custom_components.wiser_predictive import panel
+    panel.websocket_api.async_register_command(hass, panel.ws_chart)
+    reply = await _chart(hass, hass_ws_client, {})
+    assert not reply["success"] and reply["error"]["code"] == "not_configured"
+
+
+async def test_the_sidebar_panel_is_registered_once_however_many_entries(hass):
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
+    add_hub(hass, "hub-b", "Wiser HeatHub (BBB)", {"climate.bed_3": BED})
+    with patch.object(panel_mod, "register_panel", AsyncMock()) as register:
+        await setup_entry(hass, ["climate.lounge"])
+        entry = MockConfigEntry(domain=DOMAIN, unique_id="hub-b", data={"hub": "hub-b", "rooms": ["climate.bed_3"], "trigger_margin": 0.1})
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    assert register.await_count == 1
+
+
+async def test_the_only_weather_entity_is_suggested_and_two_are_not(hass):
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
+    hass.states.async_set("weather.home", "cloudy", {})
+    result = await start_flow(hass)
+    suggested = next(k.description["suggested_value"] for k in result["data_schema"].schema if k == "weather_entity")
+    assert suggested == "weather.home"
+    hass.config_entries.flow.async_abort(result["flow_id"])  # a second flow for the same hub would be "already in progress"
+    hass.states.async_set("weather.other", "sunny", {})
+    again = await start_flow(hass)
+    assert next(k.description["suggested_value"] for k in again["data_schema"].schema if k == "weather_entity") is None

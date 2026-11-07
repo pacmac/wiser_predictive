@@ -10,10 +10,11 @@
       },
       "rooms": {
         "title": "Wiser Predictive: {hub}",
-        "description": "Rooms found on {hub}. Untick any you do not want. The outside temperature sensor is optional: it is not used yet. Heat is needed when a room is at or below its minimum plus the trigger margin. To be told, choose a script; it is called with a `message` variable plus anything you put in the extra data.",
+        "description": "Rooms found on {hub}. Untick any you do not want. The Predictive Heating panel in the sidebar draws each room against the outside temperature and the forecast: choose the weather entity (forecast) and, if you have one, an outside temperature sensor (otherwise the weather entity's temperature is used). Heat is needed when a room is at or below its minimum plus the trigger margin. To be told, choose a script; it is called with a `message` variable plus anything you put in the extra data.",
         "data": {
           "rooms": "Rooms",
-          "outside_sensor": "Outside temperature sensor (optional, not used yet)",
+          "weather_entity": "Weather entity for the forecast",
+          "outside_sensor": "Outside temperature sensor (optional)",
           "trigger_margin": "Trigger margin above the minimum",
           "announce_script": "Script that announces (optional)",
           "announce_data": "Extra data for the script (optional)"
@@ -36,7 +37,8 @@
         "description": "The hub cannot be changed here. To use another hub, remove this entry and add it again.",
         "data": {
           "rooms": "Rooms",
-          "outside_sensor": "Outside temperature sensor",
+          "weather_entity": "Weather entity for the forecast",
+          "outside_sensor": "Outside temperature sensor (optional)",
           "trigger_margin": "Trigger margin above the minimum",
           "announce_script": "Script that announces (optional)",
           "announce_data": "Extra data for the script (optional)"

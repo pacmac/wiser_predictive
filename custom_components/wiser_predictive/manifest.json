@@ -1,6 +1,7 @@
 {
   "domain": "wiser_predictive",
   "name": "Wiser Predictive",
+  "after_dependencies": ["http", "frontend", "panel_custom", "recorder", "weather"],
   "codeowners": ["@pacmac"],
   "config_flow": true,
   "documentation": "https://github.com/pacmac/wiser_predictive",
@@ -8,5 +9,5 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/pacmac/wiser_predictive/issues",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

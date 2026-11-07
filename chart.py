@@ -1,29 +1,37 @@
 #!/usr/bin/env python3
-"""Development tool: draw a room's recorded history as one page, for looking at (docs/SPEC.md, VISUALISATION).
+"""Development tool: preview the Home Assistant panel on recorded history, before it is installed (docs/SPEC.md).
 
   chart.py [--room lounge] [--data data] [--out data/chart.html]
 
-Reads what replay.py --fetch saved into data/ (see FILES below) and the hourly forecast in data/forecast_hourly.json.
-Panels share one time axis, from the past to 24 h ahead, with a "now" line:
-  1 temperature (room, each valve sensor, setpoint)   2 outside (measured, forecast)
-  3 rate of change, C per hour (room and outside)      4 heating demand, %
-Boosts and heating spans are shaded across all panels. Hover shows every value at that time.
-The model's prediction and decision trace are added on top of these in the next stage; this page is the data they stand on.
+Reads what replay.py --fetch saved into data/ (climate.wiser_<room>.json with --attrs, the outside sensor's history, and
+the hourly forecast in forecast_hourly.json), shapes it with the same series.py the integration uses, and writes one page that
+runs the same frontend/panel.js the sidebar panel runs, with a stand-in for Home Assistant's `hass`.
 """
 import argparse
 import datetime
+import importlib.util
 import json
 import pathlib
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent
+PKG = ROOT / "custom_components" / "wiser_predictive"
 
-# climate attribute order saved by replay.py --fetch --attrs (see the README line in the handover)
+# climate attribute order saved by `replay.py --fetch climate.wiser_<room> --attrs ...`
 ATTRS = ["current_temperature", "temperature", "target_temp_low", "percentage_demand", "is_heating", "is_boosted",
          "is_override", "is_calling_for_heat", "current_schedule_temp"]
-HORIZON_H = 24  # hours of forecast drawn ahead of now (SPEC: past 3 days to 24 h ahead)
-GRID = 600  # seconds between samples when working out a rate: 10 min, finer than the 0.1 C sensor steps resolve anyway
-RATE_WINDOW = 7200  # seconds. Slope of the last 2 h: the sensors step 0.1 C, so a rate over a window W is quantised to
-# 0.1/W per hour = 0.05 C/h for 2 h, against cooling rates of 0.1-0.35 C/h seen in the lounge; 1 h would quantise at 0.1 C/h.
+OUTSIDE_FILE = "sensor.stats_outside_temperature.json"  # this house's outside sensor history; the preview takes it as a given
+
+
+def _load_series():
+    spec = importlib.util.spec_from_file_location("wiser_predictive_series", PKG / "series.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["wiser_predictive_series"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+series = _load_series()
 
 
 def load(path):
@@ -31,123 +39,29 @@ def load(path):
     return json.load(open(p)) if p.exists() else []
 
 
-def column(rows, i):
-    """[(seconds, value)] for column i of a fetched attribute series, skipping missing values."""
-    # sorted: the history API puts the state at the start of the period first, with the time it last changed (earlier)
-    return sorted((r[0] / 1000.0, r[i]) for r in rows if r[i] is not None)
+def climate_rows(rows):
+    """[(seconds, attributes)] from rows saved as [ms, attr1, attr2, ...]."""
+    return [(r[0] / 1000.0, dict(zip(ATTRS, r[1:]))) for r in rows]
 
 
-def state_series(rows):
-    return sorted((r[0] / 1000.0, r[1]) for r in rows if r[1] is not None)
-
-
-def hold(points, grid):
-    """Value of a step series at each grid time: the last reading at or before it."""
-    out, i, held = [], 0, None
-    for g in grid:
-        while i < len(points) and points[i][0] <= g:
-            held = points[i][1]
-            i += 1
-        out.append(held)
-    return out
-
-
-def interpolate(points, grid):
-    """Linear value of a series at each grid time (for the hourly forecast)."""
-    out, j = [], 0
-    for g in grid:
-        while j + 1 < len(points) and points[j + 1][0] <= g:
-            j += 1
-        if g < points[0][0] or g > points[-1][0]:
-            out.append(None)
-        elif j + 1 >= len(points):
-            out.append(points[-1][1])
-        else:
-            (t0, v0), (t1, v1) = points[j], points[j + 1]
-            out.append(v0 + (v1 - v0) * (g - t0) / (t1 - t0))
-    return out
-
-
-def slope_per_hour(xs, ys):
-    n = len(xs)
-    mx, my = sum(xs) / n, sum(ys) / n
-    sxx = sum((x - mx) ** 2 for x in xs)
-    return None if sxx == 0 else sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx * 3600.0
-
-
-def rates(grid, values, window=RATE_WINDOW):
-    """[(seconds, C per hour)]: least-squares slope of the values in the trailing window. Needs 3 points."""
-    out = []
-    per = window // GRID + 1
-    for k, g in enumerate(grid):
-        pts = [(grid[m], values[m]) for m in range(max(0, k - per + 1), k + 1) if values[m] is not None]
-        if len(pts) >= 3:
-            s = slope_per_hour([p[0] for p in pts], [p[1] for p in pts])
-            if s is not None:
-                out.append((g, round(s, 3)))
-    return out
-
-
-def spans(points):
-    """[(start, end)] where a boolean-ish series is true. points are (seconds, value); the last span ends at the last point."""
-    out, start = [], None
-    for t, v in points:
-        if v and start is None:
-            start = t
-        elif not v and start is not None:
-            out.append((start, t))
-            start = None
-    if start is not None:
-        out.append((start, points[-1][0]))
-    return out
+def forecast_rows(fc):
+    if not fc:
+        return []
+    entity = next(iter(fc["service_response"]))
+    return [(datetime.datetime.fromisoformat(f["datetime"]).timestamp(), f["temperature"]) for f in fc["service_response"][entity]["forecast"]]
 
 
 def build(room, data):
     d = pathlib.Path(data)
-    climate = load(d / f"climate.wiser_{room}.json")
-    if not climate:
-        raise SystemExit(f"no {d}/climate.wiser_{room}.json: fetch it with replay.py --fetch climate.wiser_{room} --attrs ...")
-    col = {name: i + 1 for i, name in enumerate(ATTRS)}
-    reading = column(climate, col["current_temperature"])
-    now = max(t for t, _ in reading)
-    outside = state_series(load(d / "sensor.stats_outside_temperature.json"))
-    itrvs = {  # the valve-mounted sensors the room reading is made from, e.g. "Lounge 1"
-        "iTRV " + p.name.split("_itrv_")[1].split("_wiser")[0].replace("_", " ").title(): state_series(load(p))
-        for p in sorted(d.glob(f"sensor.wiser_itrv_{room}_*_wiser_lts_temperature_itrv_{room}.json"))
-    }
-    fc = load(d / "forecast_hourly.json")
-    forecast = []
-    if fc:
-        for f in fc["service_response"][next(iter(fc["service_response"]))]["forecast"]:
-            t = datetime.datetime.fromisoformat(f["datetime"]).timestamp()
-            if t >= now - 3600:
-                forecast.append((t, f["temperature"]))
-    start = min(t for t, _ in reading)
-    end = now + HORIZON_H * 3600
-    grid = [start + k * GRID for k in range(int((end - start) // GRID) + 1)]
-    room_hold = hold(reading, [g for g in grid if g <= now])
-    room_rate = rates([g for g in grid if g <= now], room_hold)
-    out_hold = hold(outside, [g for g in grid if g <= now])
-    fut = [g for g in grid if g > now]
-    out_future = interpolate(forecast, fut) if forecast else [None] * len(fut)
-    out_grid = [g for g in grid if g <= now] + fut
-    out_rate = rates(out_grid, out_hold + out_future)
-    heating = column(climate, col["is_heating"])
-    boosted = column(climate, col["is_boosted"])
-    return {
-        "room": room, "now": now, "start": start, "end": end,
-        "reading": [[round(t), v] for t, v in reading],
-        "setpoint": [[round(t), v] for t, v in column(climate, col["temperature"])],
-        "itrv": {k: [[round(t), v] for t, v in s] for k, s in itrvs.items()},
-        "outside": [[round(t), v] for t, v in outside],
-        "forecast": [[round(t), v] for t, v in forecast],
-        "room_rate": [[round(t), v] for t, v in room_rate],
-        "outside_rate": [[round(t), v] for t, v in out_rate],
-        "demand": [[round(t), v] for t, v in column(climate, col["percentage_demand"])],
-        "heating": [[round(a), round(b)] for a, b in spans(heating)],
-        "boost": [[round(a), round(b)] for a, b in spans(boosted)],
-        "built": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="minutes"),
-    }
+    rows = load(d / f"climate.wiser_{room}.json")
+    if not rows:
+        raise SystemExit(f"no {d}/climate.wiser_{room}.json: fetch it with replay.py --fetch climate.wiser_{room} --attrs {','.join(ATTRS)}")
+    climate = climate_rows(rows)
+    now = max(t for t, a in climate if a.get("current_temperature") is not None)
+    outside = [(r[0] / 1000.0, r[1]) for r in load(d / OUTSIDE_FILE) if r[1] is not None]
+    chart = series.build(room.replace("_", " ").title(), climate, outside, forecast_rows(load(d / "forecast_hourly.json")), now)
+    return {"entries": [{"entry_id": "preview", "title": "Preview", "rooms": [{"entity_id": f"climate.wiser_{room}", "name": chart["name"]}]}],
+            "entry_id": "preview", "room": f"climate.wiser_{room}", "chart": chart}
 
 
 def main():
@@ -157,9 +71,12 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "data" / "chart.html"))
     args = ap.parse_args()
     payload = build(args.room, args.data)
-    html = (ROOT / "chart_template.html").read_text().replace("/*DATA*/null", json.dumps(payload, separators=(",", ":")))
+    html = (ROOT / "chart_template.html").read_text()
+    html = html.replace("/*PANEL*/", (PKG / "frontend" / "panel.js").read_text().replace("</script", "<\\/script"))
+    html = html.replace("/*DATA*/null", json.dumps(payload, separators=(",", ":")))
     pathlib.Path(args.out).write_text('<meta charset="utf-8">\n' + html)
-    print(f"{args.room}: {len(payload['reading'])} readings, now={datetime.datetime.fromtimestamp(payload['now'], datetime.timezone.utc):%m-%d %H:%M} UTC -> {args.out}")
+    c = payload["chart"]
+    print(f"{args.room}: {len(c['reading'])} readings, now={datetime.datetime.fromtimestamp(c['now'], datetime.timezone.utc):%m-%d %H:%M} UTC -> {args.out}")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ WISER = "wiser"  # the integration this one reads; each Wiser hub is one config 
 CONF_HUB = "hub"  # config entry id of the selected Wiser hub
 CONF_ROOMS = "rooms"
 CONF_OUTSIDE = "outside_sensor"
+CONF_WEATHER = "weather_entity"  # the weather entity whose hourly forecast the panel draws (and outside, if no sensor is chosen)
 CONF_TRIGGER = "trigger_margin"
 CONF_ANNOUNCE_SCRIPT = "announce_script"
 CONF_ANNOUNCE_DATA = "announce_data"

@@ -8,7 +8,7 @@ from typing import Any, Mapping
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 
 from . import hub as hubs
@@ -20,18 +20,28 @@ from .const import (
     CONF_OUTSIDE,
     CONF_ROOMS,
     CONF_TRIGGER,
+    CONF_WEATHER,
     DEFAULT_TRIGGER,
     DOMAIN,
 )
 
 
-def _schema(rooms: list[str], allowed: list[str], current: Mapping[str, Any]) -> vol.Schema:
+def _only_weather(hass: HomeAssistant) -> str | None:
+    """The weather entity to suggest without asking: the only one there is (like the hub). None if none or several."""
+    found = hass.states.async_entity_ids("weather")
+    return found[0] if len(found) == 1 else None
+
+
+def _schema(rooms: list[str], allowed: list[str], current: Mapping[str, Any], weather_default: str | None = None) -> vol.Schema:
     """`current` holds the values already chosen (empty on first setup)."""
     fields: dict[Any, Any] = {}
     fields[vol.Required(CONF_ROOMS, default=rooms)] = selector.EntitySelector(
         selector.EntitySelectorConfig(domain="climate", multiple=True, include_entities=allowed)
     )
-    # Optional: the margin rule does not read it. It is kept for the thermal-mass signals that may come later.
+    # Both optional. The panel draws the outside temperature from the sensor if there is one, else from the weather entity.
+    fields[vol.Optional(CONF_WEATHER, description={"suggested_value": current.get(CONF_WEATHER, weather_default)})] = (
+        selector.EntitySelector(selector.EntitySelectorConfig(domain="weather"))
+    )
     fields[vol.Optional(CONF_OUTSIDE, description={"suggested_value": current.get(CONF_OUTSIDE)})] = (
         selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
     )
@@ -89,7 +99,7 @@ class WiserPredictiveConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
         return self.async_show_form(
             step_id="rooms",
-            data_schema=_schema(found, found, {}),
+            data_schema=_schema(found, found, {}, _only_weather(self.hass)),
             errors=errors,
             description_placeholders={"hub": name},
         )
@@ -109,6 +119,6 @@ class PredictiveOptionsFlow(OptionsFlow):
         allowed = hubs.discover_rooms(self.hass, hub_id) if hub_id else []
         return self.async_show_form(
             step_id="init",
-            data_schema=_schema(current.get(CONF_ROOMS, []), allowed, current),
+            data_schema=_schema(current.get(CONF_ROOMS, []), allowed, current, _only_weather(self.hass)),
             description_placeholders={"hub": hubs.hub_name(self.hass, hub_id) if hub_id else "unknown"},
         )
