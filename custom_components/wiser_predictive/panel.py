@@ -79,7 +79,9 @@ async def ws_chart(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
     if not rooms:
         connection.send_result(msg["id"], {"entries": listing, "entry_id": entry.entry_id, "room": None, "chart": None})
         return
-    room = msg.get("room") if msg.get("room") in rooms else rooms[0]
+    # Opens on the active (non-passive) room, the one that calls for heat, else the first. A passive room takes free heat.
+    active = next((r for r in rooms if (s := hass.states.get(r)) is not None and s.attributes.get("is_passive") is False), rooms[0])
+    room = msg.get("room") if msg.get("room") in rooms else active
     outside_entity, weather = cfg.get(CONF_OUTSIDE) or None, cfg.get(CONF_WEATHER) or None
     now = dt_util.utcnow()
     start = now - datetime.timedelta(days=msg["days"])

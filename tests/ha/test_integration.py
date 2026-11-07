@@ -307,6 +307,15 @@ async def test_the_panel_command_returns_the_room_outside_forecast_and_heating(h
     assert end - start == 30 * 60 and chart["notes"] == []  # heating from the 60-minutes-ago row to the next row
 
 
+async def test_the_panel_opens_on_the_active_room_not_the_first_in_the_list(hass, hass_ws_client):
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE, "climate.bed_3": BED})
+    await setup_entry(hass, ["climate.bed_3", "climate.lounge"])  # the passive room is listed first
+    reply = await _chart(hass, hass_ws_client, {})
+    assert reply["result"]["room"] == "climate.lounge"
+    other = await _chart(hass, hass_ws_client, {}, room="climate.bed_3")
+    assert other["result"]["room"] == "climate.bed_3"  # an explicit choice is kept
+
+
 async def test_the_panel_command_uses_the_weather_entitys_temperature_when_there_is_no_sensor(hass, hass_ws_client):
     add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
     await setup_entry(hass, ["climate.lounge"], weather_entity="weather.home", outside_sensor=None)
