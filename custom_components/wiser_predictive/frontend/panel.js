@@ -229,14 +229,24 @@ class WiserPredictivePanel extends HTMLElement {
     const H = bottom + AXIS;
     root.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Inside and outside temperature, with the periods the heating was on shaded">${body}</svg>`;
     const svg = root.querySelector('svg'), hv = svg.querySelector('#hv');
+    const tip = document.createElementNS('http://www.w3.org/2000/svg', 'g'); tip.setAttribute('visibility', 'hidden'); tip.setAttribute('pointer-events', 'none'); svg.appendChild(tip);
+    svg.addEventListener('pointerleave', () => { tip.setAttribute('visibility', 'hidden'); hv.setAttribute('visibility', 'hidden'); });
     const move = e => {
       const r = svg.getBoundingClientRect(), px = (e.clientX - r.left) * (W / r.width);
       if (px < LEFT || px > W - RIGHT) return;
       const t = x0 + (px - LEFT) / (W - LEFT - RIGHT) * (x1 - x0), future = t > D.now, h = heats.some(([a, b]) => t >= a && t <= b);
       hv.setAttribute('x1', px); hv.setAttribute('x2', px); hv.setAttribute('visibility', 'visible');
-      this.$('readout').textContent = future
-        ? `${fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit' })} · forecast outside ${num(at(D.forecast, t, false))}°`
-        : `${fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit' })} · inside ${num(at(D.reading, t, true))}° · outside ${num(at(D.outside, t, true))}° · heating ${h ? 'ON' : 'off'}`;
+      const when = fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+      const lines = future
+        ? [...(pr ? [`Predicted inside ${num(at(pr.curve, t, false))}°`] : []), ...(pr && pr.plan && pr.plan.runs.length ? [`With the plan ${num(at(pr.plan.curve, t, false))}°`] : []), `Outside forecast ${num(at(D.forecast, t, false))}°`]
+        : [`Inside ${num(at(D.reading, t, true))}°`, `Outside ${num(at(D.outside, t, true))}°`, ...(h ? ['Heating on'] : [])];
+      this.$('readout').textContent = `${when} · ${lines.join(' · ')}`;
+      /* a label beside the cursor: the time and the values at that time */
+      const rows = [when, ...lines], w = Math.max(...rows.map(s => s.length)) * 7.4 + 18, hh = rows.length * 16 + 8;
+      const yy = Math.min(Math.max(4, (e.clientY - r.top) * (H / r.height) - hh / 2), H - hh - 4), xx = px + 14 + w > W - RIGHT ? px - 14 - w : px + 14;
+      tip.setAttribute('visibility', 'visible');
+      tip.innerHTML = `<rect x="${xx}" y="${yy}" width="${w}" height="${hh}" rx="5" fill="${css('--panel')}" stroke="${css('--axis')}"/>` +
+        rows.map((s, i) => `<text x="${xx + 8}" y="${yy + 17 + i * 16}" class="${i ? '' : 'pt'}" style="font-size:12px">${s}</text>`).join('');
     };
     svg.addEventListener('pointermove', move); svg.addEventListener('pointerdown', move);
   }
