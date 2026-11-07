@@ -17,6 +17,15 @@ except ImportError:  # loaded as plain modules by chart.py and the tests
 HORIZON_H = 24  # hours of forecast drawn ahead of now (docs/SPEC.md, VISUALISATION: past days to 24 h ahead)
 
 
+def character_of(climate, outside) -> dict[str, Any] | None:
+    """The room's thermal character (time constant, outdoor coupling, daily-swing delay) with its uncertainty, as a plain dict."""
+    from dataclasses import asdict
+
+    prepared = thermal.prepare(climate, outside)
+    found = None if prepared is None else thermal.describe(thermal.cooling_windows(*prepared[1:]))
+    return None if found is None else asdict(found)
+
+
 def predict(climate, outside, forecast, now: float, low: float | None, heating_now: bool) -> tuple[dict[str, Any] | None, list[str]]:
     """Learn the room's cooling from its history and predict the next day. Returns (prediction or None, notes saying why not).
     low is the room's own LOW setting if it has one; otherwise its floor is the lowest target it held for an hour or more."""
@@ -75,6 +84,7 @@ def build(
     notes: Sequence[str] = (),
     built: str | None = None,
     prediction: Mapping[str, Any] | None = None,
+    character: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """climate is [(seconds, attributes)] of the room's climate entity; outside and forecast are [(seconds, degrees C)]."""
     rows = sorted(climate, key=lambda r: r[0])
@@ -91,6 +101,7 @@ def build(
         "heating": [[round(a), round(b)] for a, b in heating],
         "boost": [[round(a), round(b)] for a, b in boost],
         "prediction": dict(prediction) if prediction else None,
+        "character": dict(character) if character else None,
         "notes": list(notes),
         "built": built or datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="minutes"),
     }

@@ -195,7 +195,7 @@ class WiserPredictivePanel extends HTMLElement {
         : `As far as the forecast goes (${Math.round(pr.horizon_h)} h), if nothing heats it. Lowest ${num(pr.lowest[1])}°${pr.falling_at_end ? ', and still falling when the forecast ends' : ''}.${out}`;
       predicted = `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Prediction</div><div class="v">${v}</div>
         <div class="d">${this._cold ? `<b>What if: outside ${this._cold}° colder than forecast.</b> ` : ''}${d}${pr.heating_now ? ' Heating is on now; this is what happens if it stops now.' : ''}</div>
-        <div class="d">Learned from 10 days: cools over ${pr.tau_h} h. Minimum is ${pr.minimum_source}.</div></div>`;
+        <div class="d">Minimum is ${pr.minimum_source}.</div></div>`;
     }
     let plan = '';
     if (pr && pr.plan && pr.plan.runs.length) {
@@ -207,7 +207,13 @@ class WiserPredictivePanel extends HTMLElement {
     } else if (pr && pr.plan) {
       plan = `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Plan</div><div class="v">No heat needed</div><div class="d">The room stays above its minimum as far as the forecast goes.</div></div>`;
     }
-    this.$('story').innerHTML = predicted + plan + sum(D.reading, 'Inside', '--in') + sum(D.outside, 'Outside', '--out') +
+    const ch = D.character;
+    const pm = (v, s, d) => `${v.toFixed(d)}${s === null || s === undefined ? '' : ` ±${s.toFixed(d)}`}`;
+    const character = ch ? `<div><div class="k"><i style="border-color:var(--muted)"></i>${D.name.replace(/</g, '&lt;')}: thermal character</div>
+        <div class="v">τ ${pm(ch.tau_h, ch.tau_se_h, 1)} h</div>
+        <div class="d">Thermal time constant: time to cover 63% of a change in the outside temperature. Outdoor coupling ${pm(ch.coupling, ch.coupling_se, 2)}. A daily outside swing arrives ${ch.delay_h.toFixed(1)} h late and shrunk to ${Math.round(ch.damping * 100)}%. Settles at ${ch.settles[8].toFixed(1)}° when it is 8° outside.</div>
+        <div class="d">From ${ch.windows} windows over ${ch.days} days; ± is how far it moves if any one day is left out.</div></div>` : '';
+    this.$('story').innerHTML = predicted + plan + character + sum(D.reading, 'Inside', '--in') + sum(D.outside, 'Outside', '--out') +
       `<div><div class="k"><i style="border-color:var(--heat-ink)"></i>Heating on</div><div class="v">${heats.length} ${heats.length === 1 ? 'time' : 'times'}, ${mins} min in all</div>
         <div class="d">${heats.length ? `Latest: ${when}.` : 'It did not come on.'}</div></div>`;
   }

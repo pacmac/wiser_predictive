@@ -390,6 +390,8 @@ async def test_the_panel_learns_the_rooms_cooling_and_predicts_the_next_day(hass
     assert abs(p["horizon_h"] - 29.0) < 0.1 and chart["end"] == int(NOW.timestamp()) + 29 * 3600  # as far as the forecast goes (29 hourly points)
     assert len(p["curve"]) == 59 and p["curve"][0][0] == int(NOW.timestamp())  # a point every 30 minutes, 29 h
     assert abs(p["curve"][-1][1] - 9.8) < 0.5  # the room's equilibrium at a steady 8 C outside: (0.25 + 0.03*8) * 20 = 9.8
+    ch = chart["character"]  # the same figures as the header card: time constant, coupling, daily-swing delay, uncertainty
+    assert ch is not None and abs(ch["tau_h"] - 20.0) < 1.5 and abs(ch["coupling"] - 0.6) < 0.1 and ch["tau_se_h"] is not None
     assert p["heating_now"] is False
     assert chart["notes"] == ["Not enough heat runs in the history yet to learn how the room heats up, so no heating plan."]  # no boosts in this history
 

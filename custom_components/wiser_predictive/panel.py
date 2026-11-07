@@ -160,7 +160,8 @@ async def ws_chart(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
         forecast = [(t, v + msg["outside_offset"]) for t, v in forecast]
         notes.append(f"What-if: the forecast outside temperature is shifted by {msg['outside_offset']:+.0f}°.")
     prediction = predict_room(hass, room, climate, outside, forecast, now.timestamp(), notes)
-    chart = series.build(room_label(hass, room), climate, outside, forecast, now.timestamp(), notes, prediction=prediction)
+    chart = series.build(room_label(hass, room), climate, outside, forecast, now.timestamp(), notes, prediction=prediction,
+                         character=series.character_of(climate, outside))
     connection.send_result(msg["id"], {"entries": listing, "entry_id": entry.entry_id, "room": room, "chart": chart})
 
 

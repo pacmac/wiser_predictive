@@ -56,7 +56,8 @@ def build(room, data, offset=0.0):
     latest = max(climate, key=lambda r: r[0])[1]
     low = latest.get("target_temp_low")
     prediction, notes = series.predict(climate, outside, forecast, now, low, bool(latest.get("is_heating") or latest.get("is_boosted")))
-    chart = series.build(room.replace("_", " ").title(), climate, outside, forecast, now, notes, prediction=prediction)
+    chart = series.build(room.replace("_", " ").title(), climate, outside, forecast, now, notes, prediction=prediction,
+                         character=series.character_of(climate, outside))
     return {"entries": [{"entry_id": "preview", "title": "Preview", "rooms": [{"entity_id": f"climate.wiser_{room}", "name": chart["name"]}]}],
             "entry_id": "preview", "room": f"climate.wiser_{room}", "chart": chart}
 
