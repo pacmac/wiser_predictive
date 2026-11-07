@@ -34,7 +34,7 @@ One chart per room (the active room first), x-axis from 3 days back to 24 h ahea
 4. **Demand.** Wiser's actual heating demand (%) for the room and the predictor's planned demand (%) on one axis, with shaded heat calls.
 5. **Decision trace.** `time_to_minimum` and `lead` over time, so the moment the logic fires is the moment the first falls below the second. Each action is marked on the chart with its reason in words ("forecast outside falling 1.4 °C/h, lounge reaches its minimum in 2 h 10 min, heat call needs 45 min").
 Where it is drawn:
-- **First (before any HA work): the replay.** `replay.py` renders the same chart as a static page from the recorded history, with the model run on it, so Peter can look at what it would have done on the last 8 days, including the cold-front nights, before anything is installed.
+- **First (before any HA work): the replay.** `chart.py` (with `chart_template.html`) renders the chart as a static page from the history `replay.py --fetch` saves into `data/`, then the model is run on it, so Peter can look at what it would have done on the last 8 days, including the cold-front nights, before anything is installed.
 - **Then in Home Assistant:** the integration publishes the series (history, prediction, forecast, planned demand) as sensor attributes and ships a dashboard definition. `apexcharts-card` (past + forecast + "now" line, forecast from attributes via `data_generator`) is NOT installed on the box; `mini-graph-card` is. The decision between the two, or a panel bundled in the integration so it needs no extra card, is open (below).
 Acceptance: Peter looks at the chart and can say whether the logic fired when it should.
 

@@ -223,7 +223,7 @@ REMOTE = '''
 import json, os, urllib.request, datetime
 t = os.environ["SUPERVISOR_TOKEN"]
 start = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=%(days)s)).strftime("%%Y-%%m-%%dT%%H:%%M:%%S") + "%%2B00:00"
-u = "http://supervisor/core/api/history/period/" + start + "?filter_entity_id=%(entity)s&minimal_response&no_attributes"
+u = "http://supervisor/core/api/history/period/" + start + "?filter_entity_id=%(entity)s&minimal_response&no_attributes&end_time=" + datetime.datetime.now(datetime.timezone.utc).strftime("%%Y-%%m-%%dT%%H:%%M:%%S") + "%%2B00:00"  # without end_time the API returns one day
 data = json.load(urllib.request.urlopen(urllib.request.Request(u, headers={"Authorization": "Bearer " + t})))
 out = []
 for row in (data[0] if data else []):
@@ -237,11 +237,32 @@ print(json.dumps(out))
 '''
 
 
-def fetch(entity, days, out):
+REMOTE_ATTRS = '''
+import json, os, urllib.request, datetime
+t = os.environ["SUPERVISOR_TOKEN"]
+start = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=%(days)s)).strftime("%%Y-%%m-%%dT%%H:%%M:%%S") + "%%2B00:00"
+u = "http://supervisor/core/api/history/period/" + start + "?filter_entity_id=%(entity)s&significant_changes_only=0&end_time=" + datetime.datetime.now(datetime.timezone.utc).strftime("%%Y-%%m-%%dT%%H:%%M:%%S") + "%%2B00:00"  # without end_time the API returns one day
+data = json.load(urllib.request.urlopen(urllib.request.Request(u, headers={"Authorization": "Bearer " + t}), timeout=120))
+names = %(attrs)r
+out = []
+for row in (data[0] if data else []):
+    a = row.get("attributes") or {}
+    ts = row.get("last_updated") or row.get("last_changed")  # last_changed only moves when the state string does, not on an attribute change
+    out.append([datetime.datetime.fromisoformat(ts).timestamp() * 1000] + [a.get(n) for n in names])
+print(json.dumps(out))
+'''
+
+
+def fetch(entity, days, out, attrs=None):
+    """Read-only. Without attrs: the entity's numeric states as [ms, value]. With attrs: [ms, attr1, attr2, ...] taken
+    from the entity's attributes (a climate entity's current_temperature, percentage_demand, ...)."""
     ssh = os.environ.get("HA_SSH")
     if not ssh:
         sys.exit('set HA_SSH to the command that runs a shell command on your HA box, e.g. HA_SSH="ssh root@homeassistant.local"')
-    code = REMOTE % {"days": int(days), "entity": entity}
+    if attrs:
+        code = REMOTE_ATTRS % {"days": int(days), "entity": entity, "attrs": list(attrs)}
+    else:
+        code = REMOTE % {"days": int(days), "entity": entity}
     done = subprocess.run(shlex.split(ssh) + ["python3 -"], input=code.encode(), capture_output=True, check=True)
     series = json.loads(done.stdout)
     pathlib.Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -257,11 +278,12 @@ def main():
     ap.add_argument("--fetch")
     ap.add_argument("--days", type=int, default=10)
     ap.add_argument("--out")
+    ap.add_argument("--attrs", help="with --fetch: comma-separated attribute names to take instead of the state")
     args = ap.parse_args()
     if args.fetch:
         if not args.out:
             sys.exit("--fetch needs --out FILE")
-        return fetch(args.fetch, args.days, args.out)
+        return fetch(args.fetch, args.days, args.out, args.attrs.split(",") if args.attrs else None)
     if not args.archive:
         sys.exit("need --archive DIR (or --fetch)")
     rooms, forecast = load_archive(args.archive)
