@@ -1,99 +1,61 @@
-# predictive — SPEC (draft for approval, 2026-11-07)
+# wiser_predictive — SPEC v2 (DRAFT for approval, 2026-11-07)
 
-Task: `predictive-integration`. History: `../inventory/docs/HANDOVER.md`, mcpp project `ha-inventory`, task `predictive-heating-rework` (notes 13-20).
+Replaces SPEC v1 (in git history). v1 built a margin threshold ("heat needed when the reading is within 0.1 °C of the minimum") and called it predictive. Peter: that is an automation he can write in one line; it is a white elephant. This spec is what he asked for. Task: `predictive-integration`.
 
 ## GOAL
-Every Wiser room stays above its minimum. Heat is called while the room is still ABOVE the minimum, so stored fabric heat is never lost.
-Success test: over several days the reading never touches the minimum line, and `heat_needed` is on while the reading is still above it.
-Boost on Demand only stops the boiler cycling. It does not solve the real problem: by the time the boiler calls, the thermal mass (the fabric) has already fallen to a level that would have kicked in before Boost on Demand did, and that stored heat is expensive to win back (Peter, 2026-11-07). So "reaches the minimum" is already too late; the predictor's job is to act on the thermal mass before that.
-Lounge is the gate (not passive, minimum = its target, 12.5 now). Passive rooms: minimum = thermostat LOW (12.0). Watch bed_3 next.
+Predictive heating: use the inside and outside temperature AND THE RATE OF CHANGE of both, plus the weather forecast, to decide if and when to demand heat BEFORE a room falls so low that recovering it wastes energy (the fabric has cooled). It replaces Boost on Demand, which only stops short cycling.
+It must be possible to LOOK at it: see a cold front coming in, see the room curves bend down faster, and see the action taken. Without that nobody can tell whether it is doing anything or whether the logic is right (Peter, 2026-11-07). **The visualisation is a first-class deliverable, not a later nicety. A stage is not done until its chart has been looked at.**
 
-## FORM
-Custom integration, domain `wiser_predictive`, in this repo. Installed by hand into `/config/custom_components/` on the box while developing; HACS later (already installed on the box).
-Replaces the YAML predictor (`pac_predictive_heat`, `predictive_lounge`, automation Predictive Heating).
-It REPLACES Boost on Demand and does NOT work with it (Peter, 2026-11-07, restating 2026-11-06): no input, trigger, condition or state of that automation is ever read or relied on, and nothing is designed to complement it. Boost on Demand stays untouched, and active, only until days of charts prove the predictor; then it is retired. A room's own Wiser `is_boosted`/`is_override` flags are Wiser state, not Boost on Demand, and may be read.
+## HOW THE HEATING WORKS (facts Peter gave; verify before relying on them)
+- Wiser rooms are mostly PASSIVE: they take free heat whenever water is circulating and the room is below its HIGH. One room (here the lounge) is ACTIVE and is the one that demands heat. Not every room can be passive; someone has to call.
+- Whether a passive room below its LOW calls for heat by itself is DISPUTED (Peter believes yes; Wiser forum reports say no). It has never been tested here: no passive room came within 0.7 °C of its LOW in 8 days. The predictor must not depend on it: the active room is the lever.
+- Boost on Demand exists to stop short cycling: the thermostats sit on the valves, warm up quickly, and the firmware gives no usable hysteresis. The predictor must therefore decide WHEN to start a heat call and HOW LONG to hold it (long runs, no cycling), so it replaces that job too.
+- The room reading comes from valve-mounted iTRVs and is biased by the radiator: the lounge's two iTRVs read 17.9 and 19.1 at the same moment; the room figure (18.5) is a mix. A reading taken while the radiator is hot is not the room air. The model must learn cooling only from periods when the valves are closed, and treat heat-on readings separately. A separate air sensor away from the radiator would be better; that is Peter's hardware decision.
+- Wiser publishes per-room and per-channel heating demand (%, the "LTS" sensors). The predictor's own demand is expressed the same way so the two can be drawn on one axis and compared.
 
-## LAYOUT
-```
-custom_components/wiser_predictive/
-  model.py          pure Python, NO homeassistant imports: fit, time_to_minimum, lead, decision
-  const.py
-  hub.py            HA-side hub lookups: hub name, hub device, rooms of a hub
-  manifest.json
-  __init__.py  config_flow.py  sensor.py  binary_sensor.py  translations/en.json
-tests/              pytest on model.py; fixtures cut from the archived history
-deploy.py           copy the integration to the box: dry run by default, --go copies, --restart separate
-replay.py           development tool: runs archived history through model.py; --fetch pulls one sensor's history (read-only)
-data/               fetched sensor history for the replay (git-ignored)
-docs/SPEC.md
-docs/HANDOVER.md    session handover (written by /handover)
-```
-Only files in this layout are in scope.
+## WHAT IT DECIDES
+Per room, continuously: given the room's measured temperature and rate, the outside temperature and its forecast ramp, how long until the room reaches its minimum if nothing is done (`time_to_minimum`), how long a heat call needs to take effect and to recover (`lead`: dead time + recovery), and therefore the latest safe moment to demand heat. Across rooms: demand heat when the earliest room says so; the others take the free heat. Output is a planned demand over the next 24 h, not just a yes/no now.
 
-## SKELETON FIRST (Peter, 2026-11-07)
-Approved with a priority change: the integration must be visible inside HA before the model exists, because until now the whole thing has been invisible. The first build is the shell:
-- Appears in Settings > Devices & services as "Wiser Predictive", one device, set up by a config flow, settings editable afterwards (options flow).
-- `margin` sensors per room are REAL (current reading minus the room's minimum), computed by `model.py`.
-- `time_to_minimum` sensors and `heat_needed` exist but report `unknown` until the model is built. They never report a made-up value, and `heat_needed` never reports off while it cannot know.
-- Installing it is a box change: `deploy.py` dry run first, `--go` copies files only, `--restart` (HA core restart, needed once for a new integration) only on Peter's go-ahead. The deploy backs up anything it overwrites and writes an apply row for the ledger.
+## MODEL
+Per room, first order (RC): `dT/dt = (T_out(t) − T) / τ + g·u(t)`, with `u` the heat supplied (0 with the valves closed). `T_out(t)` is the measured outside temperature now and the hourly forecast ahead, so a cold front (a steep falling ramp) shortens `time_to_minimum`. Learned per room from history:
+- `τ`, the cooling time constant: from valves-closed periods only.
+- `g` and the dead time: from heat-up periods (boosts and boiler runs).
+- the sensor's radiator bias while heating (see above).
+Every number is fitted or derived from the data, and the derivation is recorded beside it. No default entity ids, no house values in code.
+The minimum for a passive room is its LOW. The active room has no LOW: its minimum is a number the user sets in the options form (no default), because its target follows the schedule (lounge: 19.0, then 17.0, overnight 12.5–13.0).
+The v1 cooling fits (`predict_linear`, `predict_newton`) were a weak test: one outside value, a short window, a biased sensor. They are a starting point only.
+Honesty rule: it reports `unknown` when it cannot know (not enough cooling history, no forecast), never a made-up value, and it shows its confidence.
 
-## MODEL (model.py)
-DECIDED (AFK, 2026-11-07, from the replay): the MARGIN RULE. The time-to-minimum fits (linear, Newton) are built and tested but SHELVED: on the lounge's 9 touches they said 32-50 min too late at 30 min ahead, worst 150+, so no buffer can be derived from them. They stay in `model.py`; no entity uses them.
-Per room, each time its state changes:
-1. `margin` = reading minus the room's minimum. A boost or override RAISES a non-passive room's thermostat target (lounge 12.5 to 20.5 live, 2026-11-07; 15.5-16.5 in the archive), so while `is_boosted` or `is_override` is set the minimum is the last one seen before it (`MinimumMemory`), shown with `minimum_held_during_boost`. Started mid-boost there is nothing to hold: the margin is unavailable, never a made-up number. Passive rooms are unaffected (their minimum is the LOW setting).
-1b. When the room's minimum is put UP (the schedule stepping the lounge 12.5 to 19.0; not a boost), the margin drops at once although the room did not cool. The room stays off until its margin has climbed to `trigger + 0.2`, then the rule applies again (the replay ignores touches after a target change for the same reason). Lowering the minimum needs nothing.
-2. `heat_needed` is ON when `margin <= trigger`, OFF when `margin >= trigger + 0.2`, and keeps its state in between (hysteresis).
-3. A room that is being heated, boosted or overridden (`is_heating`, `is_boosted`, `is_override`, Wiser's own flags) is OFF: the episode is over.
-4. Unknown margin gives unknown, never off.
-Derived numbers (replay, 8 days, 9 touches of the lounge minimum): trigger 0.1 °C = one sensor step, the only offset of 0.1-0.4 that caught all 9 touches (13 fires, 4 false alarms, warning 11-120 min, median 71); the 0.2 °C hysteresis = two sensor steps, so a one-step flicker cannot flap it. NO cooldown: with the hysteresis, consecutive fires are never closer than 65 min. Known weakness: two of the 9 touches had warning under 20 min (11 min: a fast fall; 18 min: a target raise). Boost heat-up to +0.3 °C is 6-14 min for a single boost (every boost flag lasts 14-15 min) and 25-28 min when boosts are chained, so those two warnings can be too short.
-The thermal-mass options (time near the minimum plus outside temperature; cumulative degree-hours) are NOT built and remain open for testing against the replay.
+## VISUALISATION (critical)
+One chart per room (the active room first), x-axis from 3 days back to 24 h ahead, with a "now" line, panels sharing the axis:
+1. **Temperature.** Measured room temperature (and each iTRV), the room's minimum as a line, the predicted curve for the next 24 h (dashed, with an uncertainty band), and, faint, the prediction made 6 h ago against what happened (so accuracy is visible).
+2. **Outside.** Measured outside temperature and the forecast (dashed) on the same time axis; the cold front is the steep part.
+3. **Rate of change.** dT/dt in °C/h for the room and for the outside, on their own axis. The rate matters as much as the temperature.
+4. **Demand.** Wiser's actual heating demand (%) for the room and the predictor's planned demand (%) on one axis, with shaded heat calls.
+5. **Decision trace.** `time_to_minimum` and `lead` over time, so the moment the logic fires is the moment the first falls below the second. Each action is marked on the chart with its reason in words ("forecast outside falling 1.4 °C/h, lounge reaches its minimum in 2 h 10 min, heat call needs 45 min").
+Where it is drawn:
+- **First (before any HA work): the replay.** `replay.py` renders the same chart as a static page from the recorded history, with the model run on it, so Peter can look at what it would have done on the last 8 days, including the cold-front nights, before anything is installed.
+- **Then in Home Assistant:** the integration publishes the series (history, prediction, forecast, planned demand) as sensor attributes and ships a dashboard definition. `apexcharts-card` (past + forecast + "now" line, forecast from attributes via `data_generator`) is NOT installed on the box; `mini-graph-card` is. The decision between the two, or a panel bundled in the integration so it needs no extra card, is open (below).
+Acceptance: Peter looks at the chart and can say whether the logic fired when it should.
 
-## ENTITIES
-The device page must say something at a glance, so the headline entities come first (Peter, 2026-11-07: "this page tells me nothing at all"; half the values were unknown placeholders):
-- `sensor.lowest_margin` (°C): the nearest room to its minimum; attributes `room` (which one) and `rooms_without_a_reading`.
-- `sensor.<room>_margin` (°C above minimum), one per room. A thermostat with no reading is UNAVAILABLE, not unknown.
-- `sensor.trigger_margin` (diagnostic): the trigger in force. `sensor.hub` (diagnostic): the selected hub.
-- `sensor.<room>_time_to_minimum` is REMOVED (it was a placeholder for the shelved fit and never had a value); the setup deletes the old registry entries.
-One `binary_sensor.heat_needed`: ON if any room is on; OFF if at least one room is known and none is on; unknown only when every room is unknown (a room with a flat battery must not make it unknown for good). Attributes: per room margin and state, and the rooms that are on.
+## AI LAYER (optional, later)
+The real-time decision is the deterministic model: it must not wait on an API call or fail when the internet does. A Claude script is used for periodic review: it reads the model's fitted parameters, the log of what was predicted against what happened and the forecast, then explains misses, flags a bad fit, and proposes parameter changes that Peter approves. It is never in the control loop.
 
-## CONFIG (config flow, editable in the HA UI)
-Hub, rooms, outside sensor (OPTIONAL: the margin rule does not use it; kept for later signals), `trigger_margin` (default 0.1 °C, one sensor step), `announce_script` (optional script entity), `announce_data` (optional object merged into the script's variables, e.g. target and chime for a house with several sites). With no announce script nothing is announced.
+## WHAT IS KEPT FROM v1
+The framework: hub selection (auto if one, user picks if several), room discovery from the selected hub, config and options flow, device and entity setup, `deploy.py` (dry run, backup, hash check, separate restart), the HA test harness, `replay.py` and its archive loading, the boost and schedule-step handling in `MinimumMemory`. Nothing is hard-coded for one house.
+**Scrapped or replaced:** the margin threshold as the decision; "Heat needed within 0.1 °C" and the announcement keyed to it; the `time_to_minimum` placeholders (removed already).
 
-## HUB (Peter, 2026-11-07)
-A house can have more than one Wiser hub (here two: `03E34F` has all the rooms; `05C5D8` has the boiler channels only). Each hub is its own `wiser` config entry, and each room device is linked to its hub (`via_device`).
-- Setup: no `wiser` entry, abort with a reason. Exactly one hub, it is selected automatically and the hub step is skipped. More than one, the user selects the hub first; rooms are then discovered from that hub only.
-- One Wiser Predictive entry per hub (unique id = the hub's config entry id).
-- The selected hub is SHOWN: in the entry title ("Wiser Predictive (Wiser HeatHub (03E34F))"), as the device's "connected via" hub, and as a diagnostic `Hub` sensor on the device.
-- A hub with no rooms is refused at the rooms step ("no rooms found on this hub").
-- The hub cannot be changed in the options form (it would orphan the entities); remove and add again.
-- Entries made before this (version 0.1.0, no hub) are not migrated: remove and add again.
-
-## NOTHING HARD-CODED (Peter, 2026-11-07)
-The integration must work in any house with a Wiser system. No entity id, room name, hub name or site name of this house appears in the code or as a default.
-- The HUB is selected, never assumed (see HUB below).
-- Rooms are DISCOVERED from the selected hub: climate entities of that hub's `wiser` config entry that carry `is_passive` (Wiser rooms do; the hot water channel does not). The user can untick any. Room names come from the entity's own `name`, falling back to `friendly_name`, then the entity id.
-- Outside sensor: NO default. The user picks a temperature sensor. (In this house the garage roofspace sensor fits best, r 0.88 with the forecast, lags 2 h, about 1.4 °C warm; that is this house's choice at setup, not code.)
-- Heating-state sensor: offered from the selected hub's own device, chosen by the user. (In this house it is Hub A `sensor.wiser_heating`, NOT `_channel_1`, which is Hub B.)
-- Minimum per room comes from the climate attributes (`target_temp_low`, else `temperature`), never a number in code.
-- `deploy.py` is a development tool: the ssh command comes from the environment (`HA_SSH`), not from the repo.
-- House facts live in this spec's notes and the handover, not in `custom_components/`.
-
-## STAGE 1 (the only stage in this spec)
-Announce only. When a room turns ON (never at startup), call the configured `announce_script` with variables `message` ("<room> is <margin> °C above its minimum") plus the user's `announce_data`. In this house that script is `script.speak` with `{target: both, chime: true}`; that is the user's configuration, not code. No cooldown (see MODEL). NO `climate.set_temperature`, no change to Boost on Demand.
-Later stages (raise the lounge target; retire Boost on Demand) need their own spec and Peter's go-ahead.
-
-## TESTS AND PROOF
-- Unit tests on `model.py` with synthetic series (falling, rising, flat, short window, flicker).
-- Replay of the archived history (`../inventory/archive/predictive-*.json`, merged from 2026-10-27; git-ignored there, so cut a small fixture into `tests/`). Report per episode: lead achieved, minimum touched yes/no, false alarms.
-- A change is closed only on a test that ran red then green.
-- HA-side code (`config_flow.py`, `sensor.py`, `binary_sensor.py`, `hub.py`) runs under a real Home Assistant: `tests/ha/` with pytest-homeassistant-custom-component in a venv (`python -m pytest tests/ha -q -o asyncio_mode=auto`). It is skipped when the harness is not installed. The harness version (2026.2.3 on 2026-11-07) may lag the box (2026.10.4), so code that depends on a newer API (`via_device_id`) is chosen at run time and the newer branch is covered only by a unit test of the choice.
+## STAGES
+0. Replay chart (read-only, nothing on the box). Gate: Peter looks at it.
+1. Model fitted and measured in the replay against the 8 days (and more history fetched from the recorder with `--fetch`). Gate: lead and accuracy figures shown on the chart.
+2. Integration: publishes predictions, rates and planned demand as entities, and the dashboard. Announce only; no thermostat changes. Gate: Peter looks at it on the live dashboard for several days.
+3. Act on the active room (a boost or setpoint through its lever), replacing Boost on Demand. Needs its own go-ahead and a plan to retire Boost on Demand.
 
 ## OUT OF SCOPE
-Any box change (needs a dry run, backup, ledger row, Peter's go-ahead). The Wiser integration. The soil-sensor area fix. The `ha-inventory` repo.
-
-## DECIDED (Peter, 2026-11-07)
-- Repo: GitHub `pacmac/wiser_predictive`, public.
-- Domain and package: `wiser_predictive`, following the repo name. It replaces the draft name `predictive_heating`. Directory is `custom_components/wiser_predictive/`.
+Any box change without a dry run, backup, ledger row and Peter's go-ahead. The Wiser integration itself. The `ha-inventory` repo.
 
 ## OPEN FOR PETER
-- Lead buffer: derived from the replay (proposed default, used unless Peter gives a number).
+- Chart: ship a panel bundled in the integration (no extra card, works in any house, more to build) or use `apexcharts-card` through HACS (quick, one more dependency)? Recommendation: apexcharts-card for stages 0–2 while the model is being found, then decide.
+- The active room's minimum: a number you set. What is the lounge's?
+- A separate air sensor in the lounge (off the radiator) would give the model an honest signal; worth adding?
+- Outside source: `weather.forecast_home` (forecast and current) rather than a local sensor; the box entry's outside sensor currently points at a sensor named "Plant Dryer Temperature". Confirm.
