@@ -26,6 +26,7 @@ deploy.py           copy the integration to the box: dry run by default, --go co
 replay.py           development tool: runs archived history through model.py; --fetch pulls one sensor's history (read-only)
 data/               fetched sensor history for the replay (git-ignored)
 docs/SPEC.md
+docs/HANDOVER.md    session handover (written by /handover)
 ```
 Only files in this layout are in scope.
 
