@@ -116,7 +116,7 @@ class WiserPredictivePanel extends HTMLElement {
         <dt>Outdoor coupling</dt><dd>How many degrees the settled room temperature moves for each degree of outside change. Below 1 means heat is also exchanged with other rooms or gained inside.</dd>
         <dt>Daily swing</dt><dd>How late, and how much smaller, the day-and-night swing of the outside temperature is inside the room (the time lag and decrement of building physics).</dd>
         <dt>Settles at</dt><dd>The temperature the room heads for with no heating, for a steady outside temperature.</dd>
-        <dt>Heat response</dt><dd>How the room heats up with heat on: it heads for this maximum with this time constant.</dd>
+        <dt>Heat response</dt><dd>How the room heats up with heat on: it heads for this maximum, and the heat arrives about this many minutes (the radiator's lag) after it is called.</dd>
         <dt>Learned from</dt><dd>Every completed day is kept, so the figures use all of them. Once 14 days are kept, how fast older days fade is chosen by predicting each recent day from the days before it.</dd></dl></details>
       <p class="note" id="note"></p></main>`;
     this.$ = id => root.getElementById(id);
@@ -226,7 +226,8 @@ class WiserPredictivePanel extends HTMLElement {
         const r = pr.plan.runs, a = r[0];
         predTiles.push(tile('Planned heat', `${a.minutes} min`, `${when(a.call_by)}${r.length > 1 ? ` +${r.length - 1} more` : ''}`,
           `Minutes at full demand, started as late as is safe and just long enough to hold the minimum to the end of the forecast. Lifts the room to ${num(a.lifts_to)}°.${r.slice(1).map(x => ` Then ${x.minutes} min from ${when(x.call_by)}.`).join('')}`));
-        predTiles.push(tile('Heat response', `${num(pr.heating.tmax)}°`, `${Math.round(pr.heating.tau_min)} min · ${pr.heating.runs} runs`, 'How the room heats up with heat on: it heads for this maximum temperature with this time constant. Learned from the heat runs in the history.'));
+        const lag = pr.heating.lag_min;
+        predTiles.push(tile('Heat response', `${num(pr.heating.tmax)}°`, lag == null ? `${pr.heating.runs} runs` : `${Math.round(lag)} min lag · ${pr.heating.runs} runs`, `How the room heats up with heat on: it heads for this maximum temperature with a ${Math.round(pr.heating.tau_min)} min time constant, and the heat reaches the room about ${lag == null ? 0 : Math.round(lag)} min after it is called (the radiator's lag). Learned from the heat runs in the history.`));
       } else if (pr.plan) predTiles.push(tile('Planned heat', 'none', 'stays above', 'The room stays above its minimum as far as the forecast goes.'));
     }
     const predNote = `${this._cold ? `<b>what if ${this._cold}° colder</b>` : ''}${pr && pr.heating_now ? `${this._cold ? ' · ' : ''}heating on now` : ''}`;

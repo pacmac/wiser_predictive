@@ -70,21 +70,22 @@ def test_a_missing_outside_reading_drops_the_window_instead_of_counting_it_as_ze
 
 # --- the heating response and the plan ----------------------------------------------------------------------------------
 
-TMAX, TAU_MIN = 19.0, 80.0
+TMAX, TAU_MIN, LAG_MIN = 19.0, 80.0, 20.0
 
 
 def rows_with_runs(minutes_list, gap_h=30.0, t0=12.6):
-    """A room history: heat runs (demand 100%) of the given lengths, each starting gap_h after the last, settling at the heating
-    curve; between runs the room just sits at the settled temperature (the fit only needs before/settled readings)."""
-    rows, t, now_t = [], t0, 0.0
-    rows.append((now_t, {"current_temperature": t, "is_heating": False, "percentage_demand": 0}))
+    """A room history: heat runs (demand 100%) of the given lengths, each starting gap_h after the last. The room follows the
+    lagged heating model (TMAX, TAU_MIN, LAG_MIN), read every minute to 0.1 C like the real sensors, until it has settled."""
+    rows, now_t = [(0.0, {"current_temperature": t0, "is_heating": False, "percentage_demand": 0})], 0.0
     for m in minutes_list:
         now_t += gap_h * 3600
         rows.append((now_t - 3600, {"current_temperature": t0, "is_heating": False, "percentage_demand": 0}))  # cooled back down
-        rows.append((now_t, {"current_temperature": t0, "is_heating": True, "percentage_demand": 100}))
-        after = t0 + (TMAX - t0) * (1 - math.exp(-m / TAU_MIN))
-        rows.append((now_t + m * 60, {"current_temperature": after, "is_heating": False, "percentage_demand": 0}))
-        rows.append((now_t + m * 60 + 2 * th.SETTLED_S, {"current_temperature": after, "is_heating": False, "percentage_demand": 0}))
+        x, t = 0.0, t0
+        for k in range(0, m + 2 * th.SETTLED_S // 60 + 1):
+            on = k < m
+            x += ((1.0 if on else 0.0) - x) / LAG_MIN
+            t += x * (TMAX - t) / TAU_MIN
+            rows.append((now_t + k * 60, {"current_temperature": round(t, 1) if k else t0, "is_heating": on, "percentage_demand": 100 if on else 0}))
     return rows
 
 
@@ -92,12 +93,26 @@ def test_runs_are_found_with_their_full_demand_minutes_and_settled_lift():
     found = th.runs(rows_with_runs([15, 15, 40]))
     assert [round(r["minutes"]) for r in found] == [15, 15, 40]
     assert all(abs(r["before"] - 12.6) < 1e-9 for r in found)
-    assert abs(found[0]["settled"] - (12.6 + (TMAX - 12.6) * (1 - math.exp(-15 / TAU_MIN)))) < 1e-9
+    truth = th.Heating(TMAX, TAU_MIN, 8, 0.0, LAG_MIN)
+    assert abs(found[0]["settled"] - (12.6 + th.heat_lift(truth, 12.6, 15))) < 0.15
 
 
-def test_the_heating_fit_recovers_the_curve_from_runs_of_different_lengths():
+def test_the_heating_fit_recovers_the_curve_and_the_radiator_lag_from_runs_of_different_lengths():
     h = th.fit_heating(th.runs(rows_with_runs([10, 15, 15, 20, 40, 90, 150])))
-    assert h is not None and abs(h.tmax - TMAX) < 0.4 and abs(h.tau_min - TAU_MIN) < 8 and h.rms < 0.05
+    assert h is not None and h.rms < 0.1
+    assert abs(h.tmax - TMAX) < 0.6 and abs(h.tau_min - TAU_MIN) < 12 and abs(h.lag_min - LAG_MIN) < 5, h
+
+
+def test_a_short_run_barely_shows_at_first_and_arrives_later():
+    """The cold start that exposed the old curve: with a radiator lag, 15 minutes of heat shows under +0.2 C after 10 minutes and
+    more than five times that once the radiator has run out."""
+    h = th.Heating(18.5, 60.0, 9, 0.2, 25.0)
+    path = th.heat_path(h, 12.6, 15)
+    assert path[0] - 12.6 < 0.2 and path[-1] - 12.6 > 1.0
+    assert path[-1] - 12.6 == th.heat_lift(h, 12.6, 15)
+    assert all(b >= a for a, b in zip(path, path[1:]))  # the room does not fall while heat is arriving
+    plain = th.Heating(18.5, 60.0, 9, 0.2, 1.0)
+    assert th.heat_path(plain, 12.6, 15)[0] - 12.6 > 0.8  # with no lag the same dose would show at once
 
 
 def test_too_few_runs_gives_no_heating_model():
@@ -122,6 +137,19 @@ def test_the_plan_calls_as_late_as_is_safe_and_holds_the_minimum_to_the_end():
     assert first["call_by"] == free["call_by"]  # the same latest-safe moment the prediction gives
     assert first["minutes"] % th.RUN_STEP_MIN == 0 and first["lifts_to"] > minimum
     assert min(v for _, v in plan["curve"]) >= minimum - 0.15  # never below it, to within the 30-minute sampling
+
+
+def test_with_a_radiator_lag_the_plan_draws_the_room_rising_over_time_not_jumping():
+    p, _, t_now, _ = planned_room()
+    h = th.Heating(TMAX, TAU_MIN, 8, 0.0, LAG_MIN)
+    now, forecast = 1_000_000.0, [(1_000_000.0 + k * 3600, 2.0) for k in range(1, 49)]
+    minimum = t_now - 0.5
+    plan = th.plan(p, h, now, t_now, minimum, forecast, 2.0, horizon_h=48)
+    first = plan["runs"][0]
+    assert first["minutes"] % th.RUN_STEP_MIN == 0
+    near = [v for t, v in plan["curve"] if first["call_by"] <= t <= first["call_by"] + 1800]
+    assert near and max(near) < first["lifts_to"] - 0.3  # half an hour after the call the heat has not all arrived
+    assert min(v for _, v in plan["curve"]) > minimum - 0.15
 
 
 def test_no_run_is_planned_for_a_room_that_stays_above_its_minimum():

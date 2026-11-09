@@ -11,6 +11,7 @@ docs/SPEC.md, MODEL. Measured in replay.py --model against "the temperature stay
 """
 from __future__ import annotations
 
+import bisect
 import math
 from dataclasses import dataclass
 from typing import Sequence
@@ -291,16 +292,44 @@ RUN_STEP_MIN = 5  # the plan is in 5-minute doses: finer than the heat call can 
 MAX_RUNS = 4  # runs planned inside one 24 h horizon; more means the room cannot be held by heating at all
 
 
+LAGS_MIN = (1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 60.0)  # search grid for the radiator lag, minutes:
+# from 1 (no lag: heat reaches the room the minute it is called) to SETTLED_S/60 = 60 (a lag longer than the settle time could not be seen)
+PATH_FROM_MIN = 10  # fit from 10 min into a run: the first sensor step (0.1 C) can take up to 7.2 min to show (see LEAD_S)
+PATH_EVERY_MIN = 5  # compare the fitted path with the readings every 5 min: the climate entity updates about every 2 min
+
+
 @dataclass(frozen=True)
 class Heating:
+    """While heat is called for, a fraction x of full emission reaches the room, following the demand u with the radiator's lag:
+    dx/dt = (u - x) / lag, and the room heads for tmax at a rate x: dT/dt = x * (tmax - T) / tau. With lag = 1 minute this is the
+    plain exponential T(m) = tmax - (tmax - T0) * exp(-m / tau). The lag is why a 15-minute boost shows +0.3 C at 15 minutes and
+    +1.2 C an hour later (Saturday 2026-11-07 07:01 UTC and the boosts before it)."""
     tmax: float  # C the room heads for at full demand
     tau_min: float  # minutes
     runs: int  # runs the fit used
     rms: float  # C: how far the fit is from the runs it learned from
+    lag_min: float = 1.0  # minutes: the radiator's lag
+
+
+def heat_path(h: Heating, t0: float, minutes: float) -> list[float]:
+    """The room's temperature at each STEP after a heat call at full demand for `minutes`, from t0, until the radiator has run out
+    (5 lags: the emission is then below 1%). 1-minute integration; no cooling term, because the fit's maximum already includes
+    the losses."""
+    per = STEP // 60
+    total = int(math.ceil(minutes + 5.0 * h.lag_min))
+    total = -(-total // per) * per
+    x, t, out = 0.0, t0, []
+    for k in range(1, total + 1):
+        x += ((1.0 if k <= minutes else 0.0) - x) / h.lag_min
+        t += x * (h.tmax - t) / h.tau_min
+        if k % per == 0:
+            out.append(t)
+    return out
 
 
 def heat_lift(h: Heating, t0: float, minutes: float) -> float:
-    return (h.tmax - t0) * (1.0 - math.exp(-minutes / h.tau_min))
+    """The settled lift (C) from `minutes` of full demand: where the room ends up once the radiator has run out."""
+    return heat_path(h, t0, minutes)[-1] - t0
 
 
 def runs(climate) -> list[dict]:
@@ -340,28 +369,109 @@ def runs(climate) -> list[dict]:
         later = rows[-1][0] >= end + SETTLED_S
         clear = not any(on[k] for k in range(last_on + 1, n) if rows[k][0] <= end + SETTLED_S)
         if before is not None and settled is not None and later and clear and minutes > 0:
-            out.append({"start": start, "end": end, "minutes": minutes, "before": before, "settled": settled})
+            u, temps = _minute_path(rows, start - 60, end + SETTLED_S)
+            out.append({"start": start, "end": end, "minutes": minutes, "before": before, "settled": settled, "path": (u, temps)})
         i = max(last_on + 1, i + 1)
     return out
 
 
+def _minute_path(rows, t0: float, t1: float) -> tuple[list[float], list[float | None]]:
+    """The demand (0-1) and the room reading at every minute from t0 to t1, each carried forward from the last row at or before it.
+    Demand counts only while heating, boost or demand is on, as in `runs`."""
+    times = [t for t, _ in rows]
+    j = bisect.bisect_right(times, t0)
+    u, temp = 0.0, None
+    if j:
+        a = rows[j - 1][1]
+        on = bool(a.get("is_heating")) or bool(a.get("is_boosted")) or (a.get("percentage_demand") or 0) > 0
+        u, temp = ((a.get("percentage_demand") or 0) / 100.0 if on else 0.0), a.get("current_temperature")
+    us, ts = [], []
+    for t in range(int(t0), int(t1), 60):
+        while j < len(rows) and rows[j][0] <= t:
+            a = rows[j][1]
+            if a.get("current_temperature") is not None:
+                temp = a["current_temperature"]
+            on = bool(a.get("is_heating")) or bool(a.get("is_boosted")) or (a.get("percentage_demand") or 0) > 0
+            u = (a.get("percentage_demand") or 0) / 100.0 if on else 0.0
+            j += 1
+        us.append(u)
+        ts.append(None if temp is None else float(temp))
+    return us, ts
+
+
+def _path_error(found: Sequence[dict], tmax: float, tau: float, lag: float) -> tuple[float, int]:
+    """Sum of squared errors, and the number of readings compared, of the heating model's path against every run's readings."""
+    sq, n = 0.0, 0
+    for r in found:
+        u, temps = r["path"]
+        x, t = 0.0, temps[0]
+        for k, ui in enumerate(u):
+            x += (ui - x) / lag
+            t += x * (tmax - t) / tau
+            if k >= PATH_FROM_MIN and k % PATH_EVERY_MIN == 0 and temps[k] is not None:
+                sq += (t - temps[k]) ** 2
+                n += 1
+    return sq, n
+
+
 def fit_heating(found: Sequence[dict]) -> Heating | None:
-    """Fit the maximum and time constant to the runs by searching both, scoring the settled lifts. None with fewer than MIN_RUNS."""
+    """Fit the maximum, time constant and radiator lag to the whole path of every run (not only where it ended): coarse grid, then
+    a finer search around the best. None with fewer than MIN_RUNS. Runs without a path (rows made by hand) are fitted on the settled
+    lift alone, with no lag."""
     if len(found) < MIN_RUNS:
         return None
+    key = tuple((r["start"], r["end"], r["settled"]) for r in found)  # the same runs give the same fit: the panel asks every 5 minutes
+    if _FIT_CACHE[0] == key:
+        return _FIT_CACHE[1]
+    result = _fit_heating(found)
+    _FIT_CACHE[:] = [key, result]
+    return result
+
+
+_FIT_CACHE: list = [None, None]
+
+
+def _fit_heating(found: Sequence[dict]) -> Heating | None:
     top = max(max(r["settled"], r["before"]) for r in found)
-    best: tuple[float, float, float] | None = None
-    tmax = top + 0.1
+    if not all("path" in r for r in found):
+        best: tuple[float, float, float] | None = None
+        tmax = top + 0.1
+        while tmax <= top + 8.0:  # the maximum is above anything seen and within 8 C of it
+            tau = TAU_H_RANGE[0]
+            while tau <= TAU_H_RANGE[1]:
+                sq = sum(((tmax - r["before"]) * (1 - math.exp(-r["minutes"] / tau)) - (r["settled"] - r["before"])) ** 2 for r in found)
+                if best is None or sq < best[0]:
+                    best = (sq, tmax, tau)
+                tau += 2.0
+            tmax += 0.1
+        assert best is not None
+        return Heating(round(best[1], 1), best[2], len(found), math.sqrt(best[0] / len(found)))
+
+    best_p: tuple[float, float, float, float] | None = None
+
+    def consider(tmax: float, tau: float, lag: float) -> None:
+        nonlocal best_p
+        sq, n = _path_error(found, tmax, tau, lag)
+        if n and (best_p is None or sq / n < best_p[0]):
+            best_p = (sq / n, tmax, tau, lag)
+
+    tmax = top + 0.2
     while tmax <= top + 8.0:  # the maximum is above anything seen and within 8 C of it
         tau = TAU_H_RANGE[0]
         while tau <= TAU_H_RANGE[1]:
-            sq = sum(((tmax - r["before"]) * (1 - math.exp(-r["minutes"] / tau)) - (r["settled"] - r["before"])) ** 2 for r in found)
-            if best is None or sq < best[0]:
-                best = (sq, tmax, tau)
-            tau += 2.0
-        tmax += 0.1
-    assert best is not None
-    return Heating(round(best[1], 1), best[2], len(found), math.sqrt(best[0] / len(found)))
+            for lag in LAGS_MIN:
+                consider(tmax, tau, lag)
+            tau += 10.0
+        tmax += 0.5
+    if best_p is None:
+        return None
+    _, t0, tau0, lag0 = best_p  # refine: one coarse step either side of the best, in finer steps
+    for i in range(-5, 6):
+        for j in range(-5, 6):
+            for lag in {max(1.0, lag0 + d) for d in range(-5, 6)}:
+                consider(round(t0 + 0.1 * i, 1), tau0 + 2.0 * j, lag)
+    assert best_p is not None
+    return Heating(best_p[1], best_p[2], len(found), math.sqrt(best_p[0]), best_p[3])
 
 
 def plan(p: Params, h: Heating, now: float, temp_now: float, minimum: float, forecast, last_outside: float | None, horizon_h: float = HORIZON_H) -> dict:
@@ -374,6 +484,13 @@ def plan(p: Params, h: Heating, now: float, temp_now: float, minimum: float, for
         return {"error": "no outside temperature to plan with"}
     lead_steps = -(-LEAD_S // STEP)
     longest = max(RUN_STEP_MIN, round(3 * h.tau_min / RUN_STEP_MIN) * RUN_STEP_MIN)  # after 3 time constants the curve is 95% done
+
+    def after_call(t_call: float, call: int, minutes: float) -> tuple[list[float], list[float]]:
+        """(the room while the heat arrives, the room cooling from there to the end of the horizon), one point per STEP after the call."""
+        arriving = heat_path(h, t_call, minutes)[: steps - call]
+        rest = steps - call - len(arriving)
+        return arriving, (simulate(p, arriving[-1], outs[call + len(arriving):]) if rest > 0 else [])
+
     temps = [temp_now]  # temps[i] = temperature i steps after now
     found: list[dict] = []
     idx, t = 0, temp_now
@@ -384,22 +501,27 @@ def plan(p: Params, h: Heating, now: float, temp_now: float, minimum: float, for
             temps.extend(path)
             break
         call = max(idx, idx + k - lead_steps)
+        # The heat takes time to arrive (the radiator's lag), so the latest safe call is the latest one after which the room does not
+        # reach the minimum before the heat has overtaken the cooling; test it with the longest dose, which heats the most.
+        while call > idx and min(after_call(path[call - idx - 1], call, longest)[0]) <= minimum:
+            call -= 1
         temps.extend(path[: call - idx])
         t_call = temps[call] if call < len(temps) else t
         chosen = None
         for m in range(RUN_STEP_MIN, longest + 1, RUN_STEP_MIN):
-            after = t_call + heat_lift(h, t_call, m)
-            end = min(steps, call + -(-m * 60 // STEP))
-            tail = simulate(p, after, outs[end:])
+            arriving, tail = after_call(t_call, call, m)
             hold = steps_to_reach(tail, minimum)
-            chosen = (m, after, end, tail, hold)
-            if hold is None:
+            chosen = (m, arriving, tail, hold)
+            if hold is None and min(arriving) > minimum:
                 break
-        m, after, end, tail, hold = chosen
-        found.append({"call_by": max(round(now + idx * STEP), round(now + (idx + k) * STEP - LEAD_S)), "minutes": m, "lifts_to": round(after, 2),
+        m, arriving, tail, hold = chosen
+        end = call + len(arriving)
+        on_time = call == max(idx, idx + k - lead_steps)
+        found.append({"call_by": max(round(now + idx * STEP), round(now + (idx + k) * STEP - LEAD_S)) if on_time else round(now + call * STEP),
+                      "minutes": m, "lifts_to": round(t_call + heat_lift(h, t_call, m), 2),
                       "holds_until": None if hold is None else round(now + (end + hold) * STEP)})
-        temps.extend([t_call + (after - t_call) * (j + 1) / max(1, end - call) for j in range(end - call)])
-        idx, t = end, after
+        temps.extend(arriving)
+        idx, t = end, arriving[-1]
         if hold is None:
             temps.extend(tail)
             break

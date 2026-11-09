@@ -55,7 +55,7 @@ def predict(climate, outside, forecast, now: float, low: float | None, heating_n
     if heat is None:
         notes.append("Not enough heat runs in the history yet to learn how the room heats up, so no heating plan.")
     else:
-        result["heating"] = {"tmax": heat.tmax, "tau_min": heat.tau_min, "runs": heat.runs, "rms": round(heat.rms, 2)}
+        result["heating"] = {"tmax": heat.tmax, "tau_min": heat.tau_min, "lag_min": heat.lag_min, "runs": heat.runs, "rms": round(heat.rms, 2)}
         result["plan"] = thermal.plan(params, heat, now, t_now, minimum, forecast, last_outside, horizon)
     return result, notes
 
