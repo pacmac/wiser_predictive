@@ -16,6 +16,10 @@
           "weather_entity": "Weather entity for the forecast",
           "outside_sensor": "Outside temperature sensor (optional)",
           "trigger_margin": "Trigger margin above the minimum",
+          "wall_factor": "Wall temperature factor (0.73 = uninsulated brick)",
+          "indoor_damp": "Indoor damp: room water vapour over the outdoor air's (1.14 = sheltered space measured here)",
+          "gas_kwh_per_hour": "Gas the boiler burns in an hour at full demand, kWh (0 = do not show a cost)",
+          "gas_price": "Gas price per kWh (0 = do not show a cost)",
           "announce_script": "Script that announces (optional)",
           "announce_data": "Extra data for the script (optional)"
         }
@@ -40,6 +44,10 @@
           "weather_entity": "Weather entity for the forecast",
           "outside_sensor": "Outside temperature sensor (optional)",
           "trigger_margin": "Trigger margin above the minimum",
+          "wall_factor": "Wall temperature factor (0.73 = uninsulated brick)",
+          "indoor_damp": "Indoor damp: room water vapour over the outdoor air's (1.14 = sheltered space measured here)",
+          "gas_kwh_per_hour": "Gas the boiler burns in an hour at full demand, kWh (0 = do not show a cost)",
+          "gas_price": "Gas price per kWh (0 = do not show a cost)",
           "announce_script": "Script that announces (optional)",
           "announce_data": "Extra data for the script (optional)"
         }

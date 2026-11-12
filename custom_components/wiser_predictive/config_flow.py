@@ -16,12 +16,18 @@ from . import model
 from .const import (
     CONF_ANNOUNCE_DATA,
     CONF_ANNOUNCE_SCRIPT,
+    CONF_GAS_KWH_H,
+    CONF_GAS_PRICE,
     CONF_HUB,
+    CONF_INDOOR_DAMP,
     CONF_OUTSIDE,
     CONF_ROOMS,
     CONF_TRIGGER,
+    CONF_WALL_FACTOR,
     CONF_WEATHER,
+    DEFAULT_INDOOR_DAMP,
     DEFAULT_TRIGGER,
+    DEFAULT_WALL_FACTOR,
     DOMAIN,
 )
 
@@ -47,6 +53,23 @@ def _schema(rooms: list[str], allowed: list[str], current: Mapping[str, Any], we
     )
     fields[vol.Required(CONF_TRIGGER, default=current.get(CONF_TRIGGER, DEFAULT_TRIGGER))] = selector.NumberSelector(
         selector.NumberSelectorConfig(min=0.0, max=1.0, step=0.1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
+    )
+    # The estimated dampness of an external wall (humidity.py). Ranges: a wall's temperature factor is 0 to 1 (0.3 is already worse than
+    # a single skin of brick, 1 a surface as warm as the room); the room's vapour is at least the outdoor air's (1.0) and 1.5 is far
+    # beyond the 1.06-1.14 measured in a sheltered space.
+    fields[vol.Required(CONF_WALL_FACTOR, default=current.get(CONF_WALL_FACTOR, DEFAULT_WALL_FACTOR))] = selector.NumberSelector(
+        selector.NumberSelectorConfig(min=0.3, max=1.0, step=0.01, mode=selector.NumberSelectorMode.BOX)
+    )
+    fields[vol.Required(CONF_INDOOR_DAMP, default=current.get(CONF_INDOOR_DAMP, DEFAULT_INDOOR_DAMP))] = selector.NumberSelector(
+        selector.NumberSelectorConfig(min=1.0, max=1.5, step=0.01, mode=selector.NumberSelectorMode.BOX)
+    )
+    # The cost of a planned run: the boiler's gas at full demand (measure it on the house's own meter) and the gas price per kWh.
+    # 0 means not set, and the panel then shows no cost. Ranges: a domestic boiler burns up to a few tens of kWh an hour; a price per kWh is under 1.
+    fields[vol.Required(CONF_GAS_KWH_H, default=current.get(CONF_GAS_KWH_H, 0.0))] = selector.NumberSelector(
+        selector.NumberSelectorConfig(min=0.0, max=60.0, step=0.01, unit_of_measurement="kWh/h", mode=selector.NumberSelectorMode.BOX)
+    )
+    fields[vol.Required(CONF_GAS_PRICE, default=current.get(CONF_GAS_PRICE, 0.0))] = selector.NumberSelector(
+        selector.NumberSelectorConfig(min=0.0, max=1.0, step="any", mode=selector.NumberSelectorMode.BOX)
     )
     script = current.get(CONF_ANNOUNCE_SCRIPT)
     fields[vol.Optional(CONF_ANNOUNCE_SCRIPT, description={"suggested_value": script})] = selector.EntitySelector(

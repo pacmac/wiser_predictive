@@ -24,6 +24,7 @@ OUTSIDE_FILE = "sensor.stats_outside_temperature.json"  # this house's outside s
 
 
 sys.path.insert(0, str(PKG))  # series.py imports thermal and model as plain modules here
+import humidity  # noqa: E402
 import series  # noqa: E402
 
 
@@ -56,10 +57,23 @@ def build(room, data, offset=0.0):
     latest = max(climate, key=lambda r: r[0])[1]
     low = latest.get("target_temp_low")
     found = series.learn_without_memory(climate, outside, now)  # the preview keeps nothing between runs
+    weather = [(r[0] / 1000.0, r[1], r[2]) for r in load(d / "weather_history.json") if r[1] is not None and r[2] is not None]
+    fc = load(d / "forecast_hourly.json")
+    joined = []
+    if weather:  # the same joining the integration does in panel.weather_for: what happened (hourly), then the forecast, with the what-if shift
+        ahead = humidity.forecast_rows(fc["service_response"][next(iter(fc["service_response"]))]["forecast"]) if fc else []
+        if offset:
+            ahead = humidity.shifted(ahead, offset)
+        joined = humidity.join_weather(humidity.hourly_weather([w for w in weather if w[0] <= now], until=now), ahead)
     prediction, notes = series.predict(climate, outside, forecast, now, low, bool(latest.get("is_heating") or latest.get("is_boosted")),
-                                       None if found is None else found["params"])
+                                       None if found is None else found["params"], humidity.moisture_floor(joined, now))
+    damp = None
+    if joined:
+        reading = [(t, float(a["current_temperature"])) for t, a in climate if a.get("current_temperature") is not None]
+        damp = humidity.chart_block(reading, joined, now, curve=prediction["curve"] if prediction else None)
     chart = series.build(room.replace("_", " ").title(), climate, outside, forecast, now, notes, prediction=prediction,
-                         character=None if found is None else found["character"], learning_info=None if found is None else found["info"])
+                         character=None if found is None else found["character"], learning_info=None if found is None else found["info"],
+                         humidity=damp)
     return {"entries": [{"entry_id": "preview", "title": "Preview", "rooms": [{"entity_id": f"climate.wiser_{room}", "name": chart["name"]}]}],
             "entry_id": "preview", "room": f"climate.wiser_{room}", "chart": chart}
 

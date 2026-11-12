@@ -5,6 +5,7 @@ forecast), and the periods the heating was on (Wiser's own is_heating and is_boo
 """
 from __future__ import annotations
 
+import dataclasses
 import datetime
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -30,9 +31,11 @@ def learn_without_memory(climate, outside, now: float) -> dict[str, Any] | None:
     return None if found is None else {"character": asdict(found["character"]), "params": found["params"], "info": found["info"]}
 
 
-def predict(climate, outside, forecast, now: float, low: float | None, heating_now: bool, params=None) -> tuple[dict[str, Any] | None, list[str]]:
+def predict(climate, outside, forecast, now: float, low: float | None, heating_now: bool, params=None,
+            moisture_floor: float | None = None) -> tuple[dict[str, Any] | None, list[str]]:
     """Learn the room's cooling from its history and predict the next day. Returns (prediction or None, notes saying why not).
-    low is the room's own LOW setting if it has one; otherwise its floor is the lowest target it held for an hour or more."""
+    low is the room's own LOW setting if it has one; otherwise its floor is the lowest target it held for an hour or more.
+    moisture_floor (humidity.moisture_floor) raises the minimum when the weather needs a warmer room to keep the walls dry."""
     notes: list[str] = []
     if params is None:  # not given the learned model: fit from the history given
         prepared = thermal.prepare(climate, outside)
@@ -43,19 +46,26 @@ def predict(climate, outside, forecast, now: float, low: float | None, heating_n
     minimum, source = (low, "its low setting") if low is not None else (thermal.held_floor(climate), "the lowest target it held for an hour or more")
     if not readings or minimum is None or not outside:
         return None, ["No minimum or no current reading for this room, so no prediction."]
+    if moisture_floor is not None and moisture_floor > minimum:
+        minimum, source = moisture_floor, "the temperature that keeps the walls dry in this weather"
     horizon = thermal.horizon_for(now, forecast)
     last_outside, t_now = sorted(outside)[-1][1], float(readings[-1][1])
     result = thermal.predict(params, now, t_now, minimum, forecast, last_outside, horizon)
     if "error" in result:
         return None, [f"No prediction: {result['error']}."]
     result["minimum_source"] = source
+    result["moisture_floor"] = moisture_floor
     result["heating_now"] = heating_now
     result["horizon_h"] = round(horizon, 1)
     heat = thermal.fit_heating(thermal.runs(climate))
     if heat is None:
         notes.append("Not enough heat runs in the history yet to learn how the room heats up, so no heating plan.")
     else:
-        result["heating"] = {"tmax": heat.tmax, "tau_min": heat.tau_min, "lag_min": heat.lag_min, "runs": heat.runs, "rms": round(heat.rms, 2)}
+        after = thermal.fit_after_run(climate, outside, params)  # the extra fall in the hours after a run, from this room's own boosts
+        if after is not None:
+            heat = dataclasses.replace(heat, drop=after[0], drop_tau_h=after[1])
+        result["heating"] = {"tmax": heat.tmax, "tau_min": heat.tau_min, "lag_min": heat.lag_min, "runs": heat.runs, "rms": round(heat.rms, 2),
+                             "drop": round(heat.drop, 2), "drop_tau_h": heat.drop_tau_h}
         result["plan"] = thermal.plan(params, heat, now, t_now, minimum, forecast, last_outside, horizon)
     return result, notes
 
@@ -91,6 +101,7 @@ def build(
     prediction: Mapping[str, Any] | None = None,
     character: Mapping[str, Any] | None = None,
     learning_info: Mapping[str, Any] | None = None,
+    humidity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """climate is [(seconds, attributes)] of the room's climate entity; outside and forecast are [(seconds, degrees C)]."""
     rows = sorted(climate, key=lambda r: r[0])
@@ -109,6 +120,7 @@ def build(
         "prediction": dict(prediction) if prediction else None,
         "character": dict(character) if character else None,
         "learning": dict(learning_info) if learning_info else None,
+        "humidity": dict(humidity) if humidity else None,
         "notes": list(notes),
         "built": built or datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="minutes"),
     }

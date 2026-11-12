@@ -6,10 +6,10 @@ const STYLE = `
 :host{ display:block; box-sizing:border-box; min-height:100%; padding:16px max(16px,env(safe-area-inset-right,0px)) 32px max(16px,env(safe-area-inset-left,0px));
   --bg:var(--primary-background-color,#f4f6f4); --panel:var(--card-background-color,#fff); --ink:var(--primary-text-color,#18211f);
   --muted:var(--secondary-text-color,#5a6763); --grid:var(--divider-color,#e1e7e4); --axis:#b9c4bf;
-  --in:#123f8c; --out:#0b7a85; --heat:rgba(214,96,48,.20); --heat-ink:#b8481f; --fc:rgba(11,122,133,.06);
+  --in:#123f8c; --out:#0b7a85; --damp:#7a3fa0; --heat:rgba(214,96,48,.20); --heat-ink:#b8481f; --fc:rgba(11,122,133,.06);
   --btn:rgba(127,140,135,.16); --btn-on:var(--ink); --btn-on-ink:var(--panel);
   background:var(--bg); color:var(--ink); font-family:var(--paper-font-body1_-_font-family,"Roboto",system-ui,sans-serif); font-size:15px; line-height:1.5; }
-:host([dark]){ --in:#7ea6ff; --out:#4cc4cf; --heat:rgba(238,122,92,.22); --heat-ink:#ee7a5c; --fc:rgba(76,196,207,.07); --axis:#46544f; }
+:host([dark]){ --in:#7ea6ff; --out:#4cc4cf; --damp:#c99cf0; --heat:rgba(238,122,92,.22); --heat-ink:#ee7a5c; --fc:rgba(76,196,207,.07); --axis:#46544f; }
 main{ max-width:1100px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
 .bar{ display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; justify-content:space-between; }
 .left{ display:flex; align-items:center; gap:8px; min-width:0; }
@@ -27,12 +27,13 @@ button:focus-visible,select:focus-visible{ outline:2px solid var(--in); outline-
 .tile .l{ font-size:12px; color:var(--muted); }
 .tile .n{ font-size:22px; font-weight:500; line-height:1.25; font-variant-numeric:tabular-nums; }
 .tile .s{ font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
+.tile .n.bad{ color:var(--heat-ink); }
 #readout{ background:var(--panel); border-radius:6px; padding:8px 12px; min-height:2.6em; font-family:ui-monospace,"Roboto Mono",monospace; font-size:13px; font-variant-numeric:tabular-nums; }
 #chart{ background:var(--panel); border-radius:8px; padding:8px 0; }
 svg{ display:block; width:100%; touch-action:pan-y; }
 svg text{ fill:var(--muted); font-size:12px; font-family:inherit; }
 svg text.pt{ fill:var(--ink); font-weight:600; font-size:14px; }
-svg text.heat{ fill:var(--heat-ink); font-weight:600; font-size:11px; }
+svg text.heat{ fill:var(--heat-ink); font-weight:600; font-size:11px; paint-order:stroke; stroke:var(--panel); stroke-width:3px; stroke-linejoin:round; }
 svg text.mono{ font-family:ui-monospace,"Roboto Mono",monospace; }
 .note{ color:var(--muted); font-size:13px; max-width:80ch; margin:0; }
 .empty{ padding:28px 16px; color:var(--muted); text-align:center; }
@@ -112,7 +113,10 @@ class WiserPredictivePanel extends HTMLElement {
       <div id="chart"></div>
       <div id="rooms"></div>
       <details class="explain"><summary>What do these figures mean?</summary>
-        <dl><dt>Thermal time constant</dt><dd>The room's thermal capacitance divided by its heat loss coefficient: the time to cover 63% of a change in the outside temperature. A long one means the room changes slowly. The ± is how far the figure moves if any one day is left out, so a wide ± means it is not yet well known; it narrows as days are added.</dd>
+        <dl><dt>Wall dampness (estimated)</dt><dd>The aim is dry outside walls, not a temperature. Nothing in the house measures dampness, so it is estimated: the outside air's water (from the weather's temperature and humidity), allowed to be a little damper indoors, on the inside surface of an outside wall, which is a little colder than the room. 100% would be wet. It is a lower bound: damp fabric or cold spots would be worse. The two figures it rests on are set in the options (wall temperature factor, indoor damp).</dd>
+        <dt>Limits</dt><dd>Approved Document F (2021) says an outside wall's inside surface should stay below 95% over a day, 85% over a week and 75% over a month, in the colder months. The month is the one that matters. The tiles show the average over the last day, week and month, and how many of those hours are known: the weather is kept from now on, so the month fills in over time.</dd>
+        <dt>Keep the room above</dt><dd>The room temperature at which the wall just meets the month limit if the forecast's average weather lasted, and the one for the day limit at the worst hour of the next 24. Colder, drier air needs less heat.</dd>
+        <dt>Thermal time constant</dt><dd>The room's thermal capacitance divided by its heat loss coefficient: the time to cover 63% of a change in the outside temperature. A long one means the room changes slowly. The ± is how far the figure moves if any one day is left out, so a wide ± means it is not yet well known; it narrows as days are added.</dd>
         <dt>Outdoor coupling</dt><dd>How many degrees the settled room temperature moves for each degree of outside change. Below 1 means heat is also exchanged with other rooms or gained inside.</dd>
         <dt>Daily swing</dt><dd>How late, and how much smaller, the day-and-night swing of the outside temperature is inside the room (the time lag and decrement of building physics).</dd>
         <dt>Settles at</dt><dd>The temperature the room heads for with no heating, for a steady outside temperature.</dd>
@@ -192,7 +196,7 @@ class WiserPredictivePanel extends HTMLElement {
     /* The header is stat tiles: a label, one number, and (where there is one) its uncertainty or context beneath. Numbers are never
        left inside a sentence. What the terms mean is in the collapsible section below, and on hover. */
     const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-    const tile = (label, value, sub, help) => `<div class="tile"${help ? ` title="${esc(help)}"` : ''}><div class="l">${esc(label)}</div><div class="n">${value}</div>${sub ? `<div class="s">${sub}</div>` : '<div class="s">&nbsp;</div>'}</div>`;
+    const tile = (label, value, sub, help, bad) => `<div class="tile"${help ? ` title="${esc(help)}"` : ''}><div class="l">${esc(label)}</div><div class="n${bad ? ' bad' : ''}">${value}</div>${sub ? `<div class="s">${sub}</div>` : '<div class="s">&nbsp;</div>'}</div>`;
     const group = (title, tiles, note) => tiles.length ? `<section class="group"><h2>${esc(title)}${note ? ` <span class="gn">${note}</span>` : ''}</h2><div class="tiles">${tiles.join('')}</div></section>` : '';
     const when = t => fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
     const se = (v, d, unit = '') => (v === null || v === undefined) ? '' : `±${v.toFixed(d)}${unit}`;  /* an uncertainty, shown under its figure */
@@ -212,23 +216,53 @@ class WiserPredictivePanel extends HTMLElement {
       tile(`Heating, ${days} d`, `${heats.length}×`, `${mins} min`, heats.length ? `Last started ${when(heats[heats.length - 1][0])}` : 'It did not come on.'),
     ];
 
+    /* the goal is dry walls, not a temperature: how damp the inside of an outside wall is estimated to be (humidity.py; Approved Document F
+       Table B2 limits). An estimate from the weather's humidity and the room's temperature: nothing in the house measures it. */
+    const hm = D.humidity, dampTiles = [];
+    if (hm) {
+      const pct = a => (a === null || a === undefined) ? '–' : `${Math.round(a * 100)}%`, lim = hm.limits, now = hm.now;
+      const why = 'Estimated, not measured: how damp the inside of an outside wall is, from the room temperature and the outside air (its water, with the room allowed to be a little damper). Above 100% it would be wet.';
+      if (now) dampTiles.push(tile('Wall damp now', pct(now.activity), `room air about ${Math.round(now.room_rh)}%`, why, now.activity > lim.day));
+      for (const [name, label] of [['day', 'Last day'], ['week', 'Last week'], ['month', 'Last month']]) {
+        const m = hm.means[name]; if (m.value === null) continue;
+        dampTiles.push(tile(`${label}, average`, pct(m.value), `limit ${pct(lim[name])}${m.hours < m.of ? ` · ${m.hours} of ${m.of} h known` : ''}`,
+          `The average wall dampness over the last ${name === 'day' ? 'day' : name === 'week' ? '7 days' : '30 days'}. Approved Document F: it should stay below ${pct(lim[name])}${m.hours < m.of ? `. Only ${m.hours} of ${m.of} hours are known yet.` : '.'}`, m.value > lim[name]));
+      }
+      if (hm.floor.month) dampTiles.push(tile('Keep the room above', `${num(hm.floor.month.temp)}°`, hm.floor.day ? `${num(hm.floor.day.temp)}° for the day limit` : '',
+        `The room temperature that holds the month limit (${pct(lim.month)}) if the forecast's average weather lasted; the day limit (${pct(lim.day)}) needs ${hm.floor.day ? num(hm.floor.day.temp) + '° at the worst hour of the next 24' : 'its own figure'}. Both from the estimate, so a lower bound.`));
+      if (now) dampTiles.push(tile('Outside dew point', `${num(now.dew)}°`, `${num(now.outside)}° at ${Math.round(now.outside_rh)}%`, 'The temperature at which the outside air would start to condense. A wall colder than this is wet.'));
+    }
+
     /* prediction and plan */
     const pr = D.prediction, predTiles = [];
     if (pr) {
-      const lowSetting = pr.minimum_source.startsWith('its low');
-      predTiles.push(tile('Minimum', `${num(pr.minimum)}°`, lowSetting ? 'low setting' : 'lowest target held', `The temperature the room must stay above: ${pr.minimum_source}.`));
       predTiles.push(pr.reaches_at
         ? tile('Reaches minimum', when(pr.reaches_at), 'with no heat', 'When the predicted temperature, with no heating, falls to the minimum.')
         : tile('Stays above to', when(pr.ends_at), `low ${num(pr.lowest[1])}°${pr.falling_at_end ? ' ▼' : ''}`, `As far as the forecast goes (${Math.round(pr.horizon_h)} h), with no heating.`));
-      if (pr.reaches_at) predTiles.push(tile('Heat needed by', when(pr.call_by), `${Math.round(pr.lead_s / 60)} min lead`, `The latest safe moment to call for heat: once heat is called the room stops falling within ${Math.round(pr.lead_s / 60)} minutes.`));
       if (pr.outside_low) predTiles.push(tile('Forecast low', `${num(pr.outside_low[1])}°`, when(pr.outside_low[0]), 'The coldest outside temperature in the forecast.'));
       if (pr.plan && pr.plan.runs.length) {
-        const r = pr.plan.runs, a = r[0];
-        predTiles.push(tile('Planned heat', `${a.minutes} min`, `${when(a.call_by)}${r.length > 1 ? ` +${r.length - 1} more` : ''}`,
-          `Minutes at full demand, started as late as is safe and just long enough to hold the minimum to the end of the forecast. Lifts the room to ${num(a.lifts_to)}°.${r.slice(1).map(x => ` Then ${x.minutes} min from ${when(x.call_by)}.`).join('')}`));
         const lag = pr.heating.lag_min;
         predTiles.push(tile('Heat response', `${num(pr.heating.tmax)}°`, lag == null ? `${pr.heating.runs} runs` : `${Math.round(lag)} min lag · ${pr.heating.runs} runs`, `How the room heats up with heat on: it heads for this maximum temperature with a ${Math.round(pr.heating.tau_min)} min time constant, and the heat reaches the room about ${lag == null ? 0 : Math.round(lag)} min after it is called (the radiator's lag). Learned from the heat runs in the history.`));
-      } else if (pr.plan) predTiles.push(tile('Planned heat', 'none', 'stays above', 'The room stays above its minimum as far as the forecast goes.'));
+      }
+    }
+
+    /* the decision: the one thing the rest of the page exists to support */
+    const decTiles = [];
+    if (pr && pr.plan && !pr.plan.error) {
+      const runs = pr.plan.runs, a = runs[0], wet = pr.moisture_floor !== null && pr.moisture_floor !== undefined && pr.moisture_floor >= pr.minimum - 1e-6;
+      const keep = tile('Keep above', `${num(pr.minimum)}°`, wet ? 'to keep the walls dry' : (pr.minimum_source.startsWith('its low') ? 'low setting' : 'lowest target held'),
+        `The floor the plan holds: ${pr.minimum_source}. The walls-dry figure is an estimate (see Damp on the walls).`);
+      if (a) {
+        const hrs = (a.call_by - D.now) / 3600, soon = hrs <= 0.25;
+        decTiles.push(tile('Heat by', soon ? 'now' : when(a.call_by), soon ? 'the room is at its floor' : `in ${hrs < 1 ? Math.round(hrs * 60) + ' min' : hrs.toFixed(1) + ' h'}`,
+          `The latest safe moment to call for heat, so the room does not fall below ${num(pr.minimum)}° before the heat arrives. It moves with each new forecast.${runs.length > 1 ? ` The plan then runs ${runs.length - 1} more: ${runs.slice(1).map(x => `${when(x.call_by)} for ${x.minutes} min`).join(', ')}.` : ''}`));
+        decTiles.push(tile('Run for', `${a.minutes} min`, 'then cancel', `Minutes at full demand: the shortest run worth firing the boiler for (two of the radiator's lags). It lifts the room to about ${num(a.lifts_to)}° and holds the floor${a.holds_until ? ' until ' + when(a.holds_until) : ' to the end of the forecast'}. A longer run costs more per hour held, because a warmer room leaks faster.`));
+        decTiles.push(tile('Set target', `${num(a.target)}°`, `cancel after ${a.minutes} min`, `Boost the room to this temperature so demand stays at 100% for the whole run (no tapering, no cycling), and cancel the boost after ${a.minutes} minutes: the run is ended by the cancel, not by reaching the target.`));
+        if (a.kwh !== undefined) decTiles.push(tile('Gas for the run', `${a.kwh} kWh`, a.pence !== undefined ? `cost ${(a.pence / 100).toFixed(2)}` : '', `${a.minutes} minutes at the boiler's full-demand draw set in the options${a.pence !== undefined ? ', at the gas price set there' : ''}.`));
+        decTiles.push(keep);
+      } else {
+        decTiles.push(tile('Heat', 'none needed', `stays above ${num(pr.minimum)}°`, `The room stays above its floor (${pr.minimum_source}) as far as the forecast goes (${Math.round(pr.horizon_h)} h), with no heating.`));
+      }
     }
     const predNote = `${this._cold ? `<b>what if ${this._cold}° colder</b>` : ''}${pr && pr.heating_now ? `${this._cold ? ' · ' : ''}heating on now` : ''}`;
 
@@ -241,7 +275,7 @@ class WiserPredictivePanel extends HTMLElement {
       charTiles.push(tile('Settles at 8° out', `${ch.settles[8].toFixed(1)}°`, `5°: ${ch.settles[5].toFixed(1)}  11°: ${ch.settles[11].toFixed(1)}`, 'The temperature the room heads for with no heating, for a steady outside temperature of 8°, 5° and 11°.'));
       if (info) charTiles.push(tile('Learned from', `${info.days} days`, `${info.windows} windows`, `Every completed day is kept. ${info.half_life_days ? `Older days fade with a half-life of ${info.half_life_days} days.` : info.chosen_by_days ? 'No fading predicted best.' : 'No fading yet: choosing a rate needs 14 days.'} The ± on the figures is how far they move if any one day is left out; it narrows as days are added.`));
     }
-    this.$('story').innerHTML = group('Now', nowTiles) + group('Prediction and plan', predTiles, predNote) + group(`${D.name}: thermal character`, charTiles);
+    this.$('story').innerHTML = group('Decision', decTiles, pr && pr.plan && pr.plan.runs.length ? '<b>from the forecast and the room\'s own heating and cooling</b>' : '') + group('Now', nowTiles) +group('Damp on the walls', dampTiles, '<b>estimate, not measured</b>') + group('Prediction and plan', predTiles, predNote) + group(`${D.name}: thermal character`, charTiles);
   }
   _notes() {
     const D = this._data;
@@ -261,6 +295,12 @@ class WiserPredictivePanel extends HTMLElement {
           ...(pr && pr.plan && pr.plan.runs.length ? [{ data: pr.plan.curve, w: 2.4, dash: '8 4', color: '--heat-ink' }] : [])] },
       { id: 'out', h: 170, title: 'Outside, °C', color: '--out', lines: [{ data: D.outside, w: 2.4 }, { data: D.forecast, w: 2.4, dash: '6 4' }] },
     ];
+    const hm = D.humidity;
+    if (hm && hm.activity.length) {  /* the wall's estimated dampness, with Approved Document F's three limits; the part after now is with no heating */
+      const act = hm.activity.map(([t, a]) => [t, a * 100]), past = act.filter(p => p[0] <= D.now), ahead = act.filter(p => p[0] >= D.now - 3600);
+      panels.splice(1, 0, { id: 'damp', h: 200, title: 'Wall dampness, estimated, %', color: '--damp', unit: '%', extra: Object.values(hm.limits).map(v => v * 100),
+        lines: [{ data: past, w: 2.6 }, { data: ahead, w: 2.4, dash: '2 5' }] });
+    }
     let y = 4, body = '', first = null;
     for (const p of panels) {
       const vals = [...p.lines.flatMap(l => visible(l.data, x0, x1).map(q => q[1])), ...(p.extra || [])];
@@ -269,7 +309,7 @@ class WiserPredictivePanel extends HTMLElement {
       const top = y + TITLE, bot = top + p.h, Y = v => bot - (v - lo) / (hi - lo) * p.h;
       first = first ?? top;
       body += `<text class="pt" x="${LEFT}" y="${y + 16}">${p.title.replace(/</g, '&lt;')}</text>`;
-      for (const v of niceTicks(lo, hi, p.h > 200 ? 6 : 4)) body += `<line x1="${LEFT}" x2="${W - RIGHT}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css('--grid')}"/><text class="mono" x="${LEFT - 8}" y="${Y(v) + 4}" text-anchor="end">${v.toFixed(v % 1 ? 1 : 0)}°</text>`;
+      for (const v of niceTicks(lo, hi, p.h > 200 ? 6 : 4)) body += `<line x1="${LEFT}" x2="${W - RIGHT}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css('--grid')}"/><text class="mono" x="${LEFT - 8}" y="${Y(v) + 4}" text-anchor="end">${v.toFixed(v % 1 ? 1 : 0)}${p.unit || '°'}</text>`;
       const nowX = X(D.now);
       body += `<rect x="${nowX}" y="${top}" width="${Math.max(0, W - RIGHT - nowX)}" height="${p.h}" fill="${css('--fc')}"/>`;
       for (const [a, b] of heats) body += `<rect x="${X(Math.max(a, x0))}" y="${top}" width="${Math.max(2, X(b) - X(Math.max(a, x0)))}" height="${p.h}" fill="${css('--heat')}"/>`;
@@ -288,6 +328,12 @@ class WiserPredictivePanel extends HTMLElement {
           body += `<text class="heat" x="${cx - 5}" y="${top + 26}" text-anchor="${cx > W - 160 ? 'end' : 'start'}" ${cx > W - 160 ? '' : `dx="10"`}>heat by ${hhmm(pr.call_by)}</text>`;
         }
       }
+      if (p.id === 'damp') {  /* the limits the average must stay below: a day, a week, a month */
+        for (const [n, v] of Object.entries(hm.limits)) {
+          body += `<line x1="${LEFT}" x2="${W - RIGHT}" y1="${Y(v * 100)}" y2="${Y(v * 100)}" stroke="${css('--heat-ink')}" stroke-width="1.5" stroke-dasharray="7 4"/>`;
+          body += `<text x="${LEFT + 6}" y="${Y(v * 100) - 5}" class="heat">${n} limit ${Math.round(v * 100)}%</text>`;
+        }
+      }
       if (p.id === 'out' && D.forecast.length) body += `<text x="${X(D.now) + 6}" y="${top + 14}">forecast →</text>`;
       y = bot + GAP;
     }
@@ -304,7 +350,7 @@ class WiserPredictivePanel extends HTMLElement {
     body += `<line x1="${nowX}" x2="${nowX}" y1="${first}" y2="${bottom}" stroke="${css('--ink')}" stroke-width="1.5"/><text class="pt" x="${nowX}" y="${first - 6}" text-anchor="middle">now</text>`;
     body += `<line id="hv" x1="0" x2="0" y1="${first}" y2="${bottom}" stroke="${css('--ink')}" stroke-dasharray="2 3" visibility="hidden"/>`;
     const H = bottom + AXIS;
-    root.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Inside and outside temperature, with the periods the heating was on shaded">${body}</svg>`;
+    root.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Inside temperature, estimated wall dampness and outside temperature, with the periods the heating was on shaded">${body}</svg>`;
     const svg = root.querySelector('svg'), hv = svg.querySelector('#hv');
     const tip = document.createElementNS('http://www.w3.org/2000/svg', 'g'); tip.setAttribute('visibility', 'hidden'); tip.setAttribute('pointer-events', 'none'); svg.appendChild(tip);
     svg.addEventListener('pointerleave', () => { tip.setAttribute('visibility', 'hidden'); hv.setAttribute('visibility', 'hidden'); });
@@ -314,9 +360,10 @@ class WiserPredictivePanel extends HTMLElement {
       const t = x0 + (px - LEFT) / (W - LEFT - RIGHT) * (x1 - x0), future = t > D.now, h = heats.some(([a, b]) => t >= a && t <= b);
       hv.setAttribute('x1', px); hv.setAttribute('x2', px); hv.setAttribute('visibility', 'visible');
       const when = fmtT(t, { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+      const damp = hm && hm.activity.length ? at(hm.activity, t, false) : null, dampLine = damp === null ? [] : [`Wall damp ${Math.round(damp * 100)}%`];
       const lines = future
-        ? [...(pr ? [`Predicted inside ${num(at(pr.curve, t, false))}°`] : []), ...(pr && pr.plan && pr.plan.runs.length ? [`With the plan ${num(at(pr.plan.curve, t, false))}°`] : []), `Outside forecast ${num(at(D.forecast, t, false))}°`]
-        : [`Inside ${num(at(D.reading, t, true))}°`, `Outside ${num(at(D.outside, t, true))}°`, ...(h ? ['Heating on'] : [])];
+        ? [...(pr ? [`Predicted inside ${num(at(pr.curve, t, false))}°`] : []), ...(pr && pr.plan && pr.plan.runs.length ? [`With the plan ${num(at(pr.plan.curve, t, false))}°`] : []), ...dampLine, `Outside forecast ${num(at(D.forecast, t, false))}°`]
+        : [`Inside ${num(at(D.reading, t, true))}°`, ...dampLine, `Outside ${num(at(D.outside, t, true))}°`, ...(h ? ['Heating on'] : [])];
       this.$('readout').textContent = `${when} · ${lines.join(' · ')}`;
       /* a label beside the cursor: the time and the values at that time */
       const rows = [when, ...lines], w = Math.max(...rows.map(s => s.length)) * 7.4 + 18, hh = rows.length * 16 + 8;

@@ -290,6 +290,17 @@ TAU_H_RANGE = (20.0, 240.0)  # minutes searched for the heating time constant: s
 # longer than 4 hours is not a normal heat-up
 RUN_STEP_MIN = 5  # the plan is in 5-minute doses: finer than the heat call can be timed
 MAX_RUNS = 4  # runs planned inside one 24 h horizon; more means the room cannot be held by heating at all
+# A run is the SHORTEST dose worth firing the boiler for, repeated when the room falls to the floor again. Holding to the end of the
+# forecast in one run (the old rule) lifted the lounge to 18.9 C with 270 min at full demand: per hour the room is held, 270 min cost
+# 14 times a 10 min run (docs/SPEC.md, DECISION), because a warmer room leaks faster. What stops the dose shrinking to nothing is the
+# radiator: it needs about two lags to be hot (1 - e^-2 = 86% of full emission), and a run that ends before that heats the radiator
+# and the boiler's flow for little in the room. Lounge: lag 14 min, so 2 x 14 = 28, rounded up to the 5 min step = 30 min.
+DOSE_LAGS = 2
+# The target of a boost is set so demand stays at 100% to the end of the dose (no taper, no cycling): the demand law reaches 100% at a gap
+# (target minus reading) of 1.6 C (docs/SPEC.md, STAGE 3 DESIGN, fact 2), and the room rises by `rise` during the dose, so the target is
+# the room at the call + rise + 1.6, rounded up to the 0.5 C steps the Wiser setpoint takes.
+FULL_DEMAND_GAP = 1.6
+SETPOINT_STEP = 0.5
 
 
 LAGS_MIN = (1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 60.0)  # search grid for the radiator lag, minutes:
@@ -309,6 +320,8 @@ class Heating:
     runs: int  # runs the fit used
     rms: float  # C: how far the fit is from the runs it learned from
     lag_min: float = 1.0  # minutes: the radiator's lag
+    drop: float = 0.0  # C: the room falls this much more than the cooling model says in the hours after a run (fit_after_run)
+    drop_tau_h: float = 1.0  # hours: how fast that extra fall arrives
 
 
 def heat_path(h: Heating, t0: float, minutes: float) -> list[float]:
@@ -474,22 +487,75 @@ def _fit_heating(found: Sequence[dict]) -> Heating | None:
     return Heating(best_p[1], best_p[2], len(found), math.sqrt(best_p[0]), best_p[3])
 
 
+AFTER_RUN_HOURS = 6  # hours after the settle point the fall is followed: 8 of the lounge's 10 boosts in 10 days stayed clear of the next
+# heating for 6 h, and by then the measured extra fall had passed its peak (0.36 C at 4 h, 0.26 at 6 h), so it is seen in full
+AFTER_RUN_MIN_POINTS = 3  # hourly points a boost needs: one or two cannot tell a fall that has levelled off from one still going
+AFTER_RUN_TAUS_H = (0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0)  # search grid for the time constant of the extra fall, hours: measured on the lounge it
+# was 0.10 C at 1 h, 0.32 at 2 h and 0.35 at 3 h after the settle point, so about an hour; the grid runs from half of that to
+# AFTER_RUN_HOURS, beyond which a longer constant cannot be told from a steady offset
+
+
+def fit_after_run(climate, outside, p: Params) -> tuple[float, float] | None:
+    """How much faster than the cooling model the room falls in the hours after a run, as the room's own sensor reads it: (drop in C,
+    time constant in hours), or None with fewer than MIN_RUNS usable boosts. For every run, from SETTLED_S after it ends, the cooling
+    model is run forward from the reading and compared with the readings that follow, each hour, until heating comes back. The model
+    is too warm by drop * (1 - exp(-hours / tau)); the best tau on the grid is taken and the drop is the least-squares fit, never
+    below 0 (a room that falls slower than the model is left to the model: the safe side is to call for heat no later). Measured on
+    the lounge's 10 boosts in 10 days: 0.33 C, tau 1 h; the room's error against boosts held out fell from 0.35 C to 0.20 C."""
+    prepared = prepare(climate, outside)
+    if prepared is None:
+        return None
+    grid, temps, heating, outs = prepared
+    per, n = 3600 // STEP, len(grid)
+    boosts = []
+    for i in range(1, n):
+        if not (heating[i - 1] and not heating[i]):
+            continue
+        s = i + SETTLE
+        e = s + AFTER_RUN_HOURS * per
+        if e >= n or temps[s] is None or any(o is None for o in outs[s:e]):
+            continue
+        free = simulate(p, temps[s], outs[s:e])
+        points = []
+        for hour in range(1, AFTER_RUN_HOURS + 1):
+            k = s + hour * per
+            if any(heating[i:k + 1]) or temps[k] is None:
+                break
+            points.append((hour, free[hour * per - 1] - temps[k]))
+        if len(points) >= AFTER_RUN_MIN_POINTS:
+            boosts.append(points)
+    if len(boosts) < MIN_RUNS:
+        return None
+    best = None
+    for tau in AFTER_RUN_TAUS_H:
+        pairs = [(1.0 - math.exp(-hour / tau), error) for points in boosts for hour, error in points]
+        drop = sum(x * y for x, y in pairs) / sum(x * x for x, _ in pairs)
+        sse = sum((y - drop * x) ** 2 for x, y in pairs)
+        if best is None or sse < best[0]:
+            best = (sse, drop, tau)
+    return max(0.0, best[1]), best[2]
+
+
 def plan(p: Params, h: Heating, now: float, temp_now: float, minimum: float, forecast, last_outside: float | None, horizon_h: float = HORIZON_H) -> dict:
-    """Heat runs that keep the room at or above its minimum for the next HORIZON_H, each as late as is safe and just long enough to
-    reach the end of the horizon (or, if one run cannot, as long as is worth it). Returns {'runs': [...], 'curve': the temperature
-    with the runs, 30-minute points}."""
+    """Heat runs that keep the room at or above its minimum for the next HORIZON_H, each as late as is safe and the shortest worth
+    firing for (DOSE_LAGS radiator lags), repeated when the room falls to the minimum again. Each run carries the boost target that
+    keeps demand at 100% for its length. Returns {'runs': [...], 'curve': the temperature with the runs, 30-minute points}."""
     steps = int(horizon_h * 3600 // STEP)
     outs = outside_path(last_outside, now, forecast, steps)
     if any(o is None for o in outs):
         return {"error": "no outside temperature to plan with"}
     lead_steps = -(-LEAD_S // STEP)
-    longest = max(RUN_STEP_MIN, round(3 * h.tau_min / RUN_STEP_MIN) * RUN_STEP_MIN)  # after 3 time constants the curve is 95% done
+    dose = max(RUN_STEP_MIN, -(-math.ceil(DOSE_LAGS * h.lag_min) // RUN_STEP_MIN) * RUN_STEP_MIN)  # the shortest worth firing for
+    longest = max(dose, round(3 * h.tau_min / RUN_STEP_MIN) * RUN_STEP_MIN)  # after 3 time constants the curve is 95% done
 
     def after_call(t_call: float, call: int, minutes: float) -> tuple[list[float], list[float]]:
         """(the room while the heat arrives, the room cooling from there to the end of the horizon), one point per STEP after the call."""
         arriving = heat_path(h, t_call, minutes)[: steps - call]
         rest = steps - call - len(arriving)
-        return arriving, (simulate(p, arriving[-1], outs[call + len(arriving):]) if rest > 0 else [])
+        tail = simulate(p, arriving[-1], outs[call + len(arriving):]) if rest > 0 else []
+        # The arriving path ends about SETTLED_S after the dose: the point fit_after_run measures from. After it the room, as the valve
+        # sensor reads it, falls `drop` more than the cooling model says, arriving with time constant drop_tau_h.
+        return arriving, [v - h.drop * (1.0 - math.exp(-(k + 1) * STEP / 3600.0 / h.drop_tau_h)) for k, v in enumerate(tail)]
 
     temps = [temp_now]  # temps[i] = temperature i steps after now
     found: list[dict] = []
@@ -502,23 +568,26 @@ def plan(p: Params, h: Heating, now: float, temp_now: float, minimum: float, for
             break
         call = max(idx, idx + k - lead_steps)
         # The heat takes time to arrive (the radiator's lag), so the latest safe call is the latest one after which the room does not
-        # reach the minimum before the heat has overtaken the cooling; test it with the longest dose, which heats the most.
-        while call > idx and min(after_call(path[call - idx - 1], call, longest)[0]) <= minimum:
+        # reach the minimum before the heat has overtaken the cooling; test it with the dose that will be used.
+        while call > idx and min(after_call(path[call - idx - 1], call, dose)[0]) <= minimum:
             call -= 1
         temps.extend(path[: call - idx])
         t_call = temps[call] if call < len(temps) else t
         chosen = None
-        for m in range(RUN_STEP_MIN, longest + 1, RUN_STEP_MIN):
+        for m in range(dose, longest + 1, RUN_STEP_MIN):  # the dose, longer only if it does not bring the room back above the minimum
             arriving, tail = after_call(t_call, call, m)
             hold = steps_to_reach(tail, minimum)
             chosen = (m, arriving, tail, hold)
-            if hold is None and min(arriving) > minimum:
+            if arriving[-1] > minimum:
                 break
         m, arriving, tail, hold = chosen
         end = call + len(arriving)
         on_time = call == max(idx, idx + k - lead_steps)
+        at_end = min(len(arriving), m * 60 // STEP)  # the room when the dose ends: the heat is still arriving after it
+        rise = arriving[at_end - 1] - t_call if at_end >= 1 else 0.0
+        target = math.ceil((t_call + rise + FULL_DEMAND_GAP) / SETPOINT_STEP - 1e-9) * SETPOINT_STEP
         found.append({"call_by": max(round(now + idx * STEP), round(now + (idx + k) * STEP - LEAD_S)) if on_time else round(now + call * STEP),
-                      "minutes": m, "lifts_to": round(t_call + heat_lift(h, t_call, m), 2),
+                      "minutes": m, "target": target, "lifts_to": round(t_call + heat_lift(h, t_call, m), 2),
                       "holds_until": None if hold is None else round(now + (end + hold) * STEP)})
         temps.extend(arriving)
         idx, t = end, arriving[-1]

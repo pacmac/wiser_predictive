@@ -343,6 +343,22 @@ async def test_the_command_errors_when_the_integration_has_no_entry(hass, hass_w
     assert not reply["success"] and reply["error"]["code"] == "not_configured"
 
 
+async def test_the_gas_for_a_run_is_shown_only_when_the_options_give_the_boilers_draw_and_the_price():
+    def predicted():
+        return {"plan": {"runs": [{"minutes": 30}, {"minutes": 60}]}}
+
+    p = predicted()
+    panel_mod.with_gas({}, p)  # nothing set: no made-up cost
+    assert "kwh" not in p["plan"]["runs"][0]
+    p = predicted()
+    panel_mod.with_gas({"gas_kwh_per_hour": 9.0}, p)  # draw but no price: kWh only
+    assert p["plan"]["runs"][0]["kwh"] == 4.5 and "pence" not in p["plan"]["runs"][0] and p["plan"]["runs"][1]["kwh"] == 9.0
+    p = predicted()
+    panel_mod.with_gas({"gas_kwh_per_hour": 9.0, "gas_price": 0.1}, p)
+    assert p["plan"]["runs"][0]["pence"] == 45.0  # 4.5 kWh at 0.10 a kWh is 0.45, in hundredths
+    panel_mod.with_gas({"gas_kwh_per_hour": 9.0}, None)  # no prediction: nothing to do, no error
+
+
 async def test_the_sidebar_panel_is_registered_once_however_many_entries(hass):
     add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
     add_hub(hass, "hub-b", "Wiser HeatHub (BBB)", {"climate.bed_3": BED})
@@ -380,11 +396,20 @@ async def test_the_panel_learns_the_rooms_cooling_and_predicts_the_next_day(hass
         lounge_states.append(_state("climate.lounge", "heat", {**LOUNGE, "current_temperature": round(t, 2), "temperature": 12.5}, ago))
         outside_states.append(_state(OUTSIDE, f"{out:.2f}", {}, ago))
         t += (1 / 6) * (0.25 - t / 20.0 + 0.03 * out)
-    forecast = [{"datetime": (NOW + datetime.timedelta(hours=k)).isoformat(), "temperature": 8.0} for k in range(1, 30)]
-    reply = await _chart(hass, hass_ws_client, {"climate.lounge": lounge_states, OUTSIDE: outside_states}, forecast)
+    forecast = [{"datetime": (NOW + datetime.timedelta(hours=k)).isoformat(), "temperature": 8.0, "humidity": 88.0} for k in range(1, 30)]
+    weather_states = [_state("weather.home", "cloudy", {"temperature": 8.0, "humidity": 88.0}, 60 * m) for m in range(5 * 24, 0, -1)]  # hourly, 5 days
+    reply = await _chart(hass, hass_ws_client, {"climate.lounge": lounge_states, OUTSIDE: outside_states, "weather.home": weather_states}, forecast)
     chart = reply["result"]["chart"]
     p = chart["prediction"]
     assert p is not None, chart["notes"]
+    damp = chart["humidity"]  # estimated wall dampness: 8 C at 88% outside, the room's own reading, defaults k 1.14 and f 0.73
+    assert damp is not None and damp["k"] == 1.14 and damp["f"] == 0.73
+    from custom_components.wiser_predictive import humidity as hum
+    e_out = hum.vapour_pressure(8.0, 88.0)
+    t_now = chart["reading"][-1][1]
+    assert abs(damp["now"]["activity"] - hum.activity(t_now, 8.0, e_out, 1.14, 0.73)) < 0.002 and abs(damp["now"]["dew"] - hum.dew_point(8.0, 88.0)) < 0.01
+    assert damp["activity"][-1][0] > chart["now"] and damp["floor"]["day"]["temp"] < damp["floor"]["month"]["temp"]  # the forecast hours are drawn too
+    assert damp["means"]["day"]["hours"] == 24 and damp["means"]["month"]["of"] == 720
     assert abs(p["tau_h"] - 20.0) < 1.5
     assert p["minimum"] == 12.5 and "an hour or more" in p["minimum_source"]  # the lounge has no LOW setting: its floor is the target it held
     assert abs(p["horizon_h"] - 29.0) < 0.1 and chart["end"] == int(NOW.timestamp()) + 29 * 3600  # as far as the forecast goes (29 hourly points)
@@ -431,6 +456,36 @@ async def test_completed_days_are_kept_so_memory_outlives_the_recorder(hass, has
     await hass.async_block_till_done()
     saved = hass_storage["wiser_predictive.learned"]["data"]["rooms"]["climate.lounge"]
     assert len(saved) >= 6 and all(len(s) == 11 for s in saved.values())
+
+
+async def test_the_panel_says_why_there_is_no_dampness_estimate(hass, hass_ws_client):
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
+    await setup_entry(hass, ["climate.lounge"], weather_entity="weather.home", outside_sensor=OUTSIDE)
+    states = {"climate.lounge": [_state("climate.lounge", "heat", LOUNGE, 5)], OUTSIDE: [_state(OUTSIDE, "7.0", {}, 5)],
+              "weather.home": [_state("weather.home", "cloudy", {"temperature": 7.0}, 5)]}  # a weather entity that gives no humidity
+    chart = (await _chart(hass, hass_ws_client, states, [{"datetime": "2026-11-07T11:00:00+00:00", "temperature": 6.0}]))["result"]["chart"]
+    assert chart["humidity"] is None and any("no dampness estimate" in n for n in chart["notes"])
+
+
+async def test_the_weather_the_recorder_holds_is_kept_hour_by_hour_for_the_month(hass, hass_storage):
+    from homeassistant.util import dt as dt_util
+    from custom_components.wiser_predictive import learner
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+    add_hub(hass, "hub-a", "Wiser HeatHub (AAA)", {"climate.lounge": LOUNGE})
+    entry = await setup_entry(hass, ["climate.lounge"], weather_entity="weather.home", outside_sensor=OUTSIDE)
+    hours = 30  # hourly states of the weather entity, the last one 5 minutes ago (so its hour is not over)
+    weather_states = [_state("weather.home", "cloudy", {"temperature": 7.0 + m * 0.1, "humidity": 80.0 + m}, 60 * (hours - m) + 5) for m in range(hours)]
+    fetched = {"climate.lounge": [], OUTSIDE: [], "weather.home": weather_states}
+    with patch.object(history_mod, "fetch", AsyncMock(return_value=fetched)), patch("homeassistant.util.dt.utcnow", return_value=NOW):
+        await learner.update_all(hass, entry)
+        kept = await (await learner.learned(hass)).weather()
+    assert len(kept) >= hours - 2 and all(h % 3600 == 0 for h in kept)  # one row per hour, on the hour
+    newest = max(kept)
+    assert newest + 3600 <= NOW.timestamp()  # only hours that are over
+    async_fire_time_changed(hass, dt_util.utcnow() + datetime.timedelta(seconds=30))
+    await hass.async_block_till_done()
+    assert len(hass_storage["wiser_predictive.learned"]["data"]["weather"]) == len(kept)
 
 
 async def test_the_rooms_command_describes_each_room_with_its_uncertainty(hass, hass_ws_client):

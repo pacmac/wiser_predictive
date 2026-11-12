@@ -17,8 +17,9 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from . import history, learner, model, series
-from .const import CONF_OUTSIDE, CONF_ROOMS, CONF_WEATHER, DOMAIN
+from . import history, humidity, learner, model, series
+from .const import (CONF_GAS_KWH_H, CONF_GAS_PRICE, CONF_INDOOR_DAMP, CONF_OUTSIDE, CONF_ROOMS, CONF_WALL_FACTOR, CONF_WEATHER,
+                    DEFAULT_INDOOR_DAMP, DEFAULT_WALL_FACTOR, DOMAIN)
 from .learner import LEARN_DAYS
 from .sensor import room_label
 
@@ -90,12 +91,54 @@ async def ws_rooms(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
     connection.send_result(msg["id"], {"rooms": out, "notes": notes})
 
 
-def predict_room(hass, room, climate, outside, forecast, now, notes: list[str], params=None) -> dict[str, Any] | None:
+def weather_for(weather, weather_states, raw_forecast, now, offset, notes: list[str]) -> list[tuple[float, float, float]]:
+    """What the weather entity said (hourly) and says will happen, as [(hour, temperature, humidity)]. Says why when there is none."""
+    if not weather:
+        notes.append("No weather entity is set, so there is no dampness estimate: choose one in the options.")
+        return []
+    happened = humidity.hourly_from_states([(s.last_updated.timestamp(), dict(s.attributes)) for s in weather_states], until=now)
+    ahead = humidity.forecast_rows(raw_forecast)
+    if offset:  # what-if colder: the same water in colder air
+        ahead = humidity.shifted(ahead, offset)
+    joined = humidity.join_weather([w for w in happened if w[0] <= now], ahead)
+    if not joined:
+        notes.append("The weather entity gives no temperature and humidity, so there is no dampness estimate.")
+    return joined
+
+
+def damp_settings(cfg) -> tuple[float, float]:
+    return float(cfg.get(CONF_INDOOR_DAMP, DEFAULT_INDOOR_DAMP)), float(cfg.get(CONF_WALL_FACTOR, DEFAULT_WALL_FACTOR))
+
+
+def humidity_for(cfg, joined, climate, prediction, now) -> dict[str, Any] | None:
+    """The room's estimated wall dampness (humidity.py) from the joined weather (weather_for)."""
+    if not joined:
+        return None
+    k, f = damp_settings(cfg)
+    reading = [(t, float(a["current_temperature"])) for t, a in climate if a.get("current_temperature") is not None]
+    return humidity.chart_block(reading, joined, now, k, f, prediction["curve"] if prediction else None)
+
+
+def with_gas(cfg, prediction) -> None:
+    """Adds the first planned run's gas to the prediction's plan when the options give the boiler's draw and the gas price (both
+    measured from the house's own meter; 0 means not set, and nothing is shown rather than a made-up cost)."""
+    per_hour, price = float(cfg.get(CONF_GAS_KWH_H, 0) or 0), float(cfg.get(CONF_GAS_PRICE, 0) or 0)
+    plan = (prediction or {}).get("plan") or {}
+    if not per_hour:
+        return
+    for run in plan.get("runs", []):
+        run["kwh"] = round(per_hour * run["minutes"] / 60.0, 2)
+        if price:
+            run["pence"] = round(run["kwh"] * price * 100.0, 1)
+
+
+def predict_room(hass, room, climate, outside, forecast, now, notes: list[str], params=None, moisture_floor=None) -> dict[str, Any] | None:
     """Learn the room's cooling from its recorded history, then predict the next day with the forecast. Says why when it cannot."""
     state = hass.states.get(room)
     attrs = state.attributes if state is not None else {}
     low = model.minimum_of(attrs) if attrs.get("target_temp_low") is not None else None
-    result, why = series.predict(climate, outside, forecast, now, low, bool(attrs.get("is_heating") or attrs.get("is_boosted")), params)
+    result, why = series.predict(climate, outside, forecast, now, low, bool(attrs.get("is_heating") or attrs.get("is_boosted")), params,
+                                 moisture_floor)
     notes.extend(why)
     return result
 
@@ -134,6 +177,8 @@ async def ws_chart(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
     now = dt_util.utcnow()
     start = now - datetime.timedelta(days=max(msg["days"], LEARN_DAYS))  # always enough history to learn from
     wanted = [room] + ([outside_entity] if outside_entity else [weather] if weather else [])
+    if weather and weather not in wanted:
+        wanted.append(weather)  # its humidity is needed even when a sensor gives the outside temperature
     notes: list[str] = []
     try:
         states = await history.fetch(hass, wanted, start, now)
@@ -145,9 +190,11 @@ async def ws_chart(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
     if not wanted[1:]:
         notes.append("No outside temperature sensor or weather entity is set: choose one in the options.")
     forecast: list[tuple[float, float]] = []
+    raw_forecast: list[dict[str, Any]] = []
     if weather:
         try:
-            forecast = forecast_series(await history.hourly_forecast(hass, weather))
+            raw_forecast = await history.hourly_forecast(hass, weather)
+            forecast = forecast_series(raw_forecast)
         except Exception as err:
             _LOGGER.warning("forecast unavailable: %s", err)
             notes.append(f"No forecast: {err}")
@@ -157,9 +204,15 @@ async def ws_chart(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
         forecast = [(t, v + msg["outside_offset"]) for t, v in forecast]
         notes.append(f"What-if: the forecast outside temperature is shifted by {msg['outside_offset']:+.0f}°.")
     found = await learner.learn(hass, room, climate, outside, now.timestamp())  # remembers the room's completed days, then fits from all
-    prediction = predict_room(hass, room, climate, outside, forecast, now.timestamp(), notes, None if found is None else found["params"])
+    joined = weather_for(weather, states.get(weather, []) if weather else [], raw_forecast, now.timestamp(), msg["outside_offset"], notes)
+    k, f = damp_settings(cfg)
+    prediction = predict_room(hass, room, climate, outside, forecast, now.timestamp(), notes, None if found is None else found["params"],
+                              humidity.moisture_floor(joined, now.timestamp(), k, f))
+    with_gas(cfg, prediction)
+    damp = humidity_for(cfg, joined, climate, prediction, now.timestamp())
     chart = series.build(room_label(hass, room), climate, outside, forecast, now.timestamp(), notes, prediction=prediction,
-                         character=None if found is None else found["character"], learning_info=None if found is None else found["info"])
+                         character=None if found is None else found["character"], learning_info=None if found is None else found["info"],
+                         humidity=damp)
     connection.send_result(msg["id"], {"entries": listing, "entry_id": entry.entry_id, "room": room, "chart": chart})
 
 
